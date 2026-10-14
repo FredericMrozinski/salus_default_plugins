@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Table Viewer</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <div class="bar">
+      <strong id="file" class="grow"></strong>
+      <label id="editToggle" class="switch" hidden title="Change this file. Changes are written when you press Save or switch editing off.">
+        <input id="edit" type="checkbox"><span>Edit</span>
+      </label>
+      <span id="editTools" class="edit-tools">
+        <span id="dirty" class="dirty" hidden>● modified</span>
+        <button id="addrow" title="Add a row at the end">Add row</button>
+        <button id="addcol" title="Add a column at the end">Add column</button>
+        <button id="discard" title="Throw the edits away and load the file again">Discard changes</button>
+        <button id="save" class="primary" title="Write the changes to the file (Ctrl/Cmd+S)">Save</button>
+      </span>
+      <select id="table" hidden></select>
+      <input id="search" type="search" placeholder="Search all columns…">
+      <button id="info" title="Show column types">Columns</button>
+    </div>
+    <div id="notice" class="notice" hidden></div>
+    <div id="message" class="message">Loading…</div>
+    <div id="infobox" class="infobox" hidden></div>
+    <div id="grid" class="grid" hidden>
+      <table><thead><tr id="head"></tr><tr id="filters" class="filters"></tr></thead><tbody id="body"></tbody></table>
+    </div>
+    <div class="bar pager" id="pager" hidden>
+      <button id="prev">‹</button>
+      <span id="range"></span>
+      <button id="next">›</button>
+      <span class="grow"></span>
+      <label>Rows per page <select id="size"><option>50</option><option selected>100</option><option>250</option><option>500</option></select></label>
+    </div>
+  </div>
+  <script type="module" src="script.js"></script>
+</body>
+</html>

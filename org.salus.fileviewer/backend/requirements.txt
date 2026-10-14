@@ -1,0 +1,5 @@
+openslide-python
+openslide-bin
+pillow
+pypdfium2
+pillow-heif  # optional: HEIC/HEIF inside Pillow (without it, macOS sips or libheif's heif-convert is used)

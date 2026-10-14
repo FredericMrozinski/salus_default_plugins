@@ -1,0 +1,40 @@
+[description]
+name = "Components Demo"
+developer = "Salus Organization"
+description = "Shows how frontend components open and message each other, and how files are opened in viewers."
+contact = "frederic.mrozinski@tum.de"
+version = "0.0.1"
+
+[meta]
+api-version = 3
+entry-component = "main"
+
+[backend]
+entrypoint = "backend/plugin.py"
+lifetime = "panel"
+
+[[frontend-component]]
+component-name = "main"
+title = "Demo"
+entrypoint = "frontend/main/index.html"
+target-panel = "center"
+
+[[frontend-component]]
+component-name = "side"
+title = "Demo side"
+entrypoint = "frontend/side/index.html"
+target-panel = "right"
+
+[[frontend-component]]
+component-name = "viewer-a"
+title = "Demo viewer A"
+entrypoint = "frontend/viewer/index.html"
+target-panel = "center"
+file_viewer_for = ["demo"]
+
+[[frontend-component]]
+component-name = "viewer-b"
+title = "Demo viewer B"
+entrypoint = "frontend/viewer/index.html"
+target-panel = "bottom"
+file_viewer_for = ["demo"]

@@ -1,0 +1,35 @@
+[description]
+name = "Dataset Workbench"
+developer = "Salus Organization"
+description = "Organize raw data in sources and bundle it into datasets for machine learning."
+contact = "frederic.mrozinski@tum.de"
+version = "0.1.0"
+
+[meta]
+api-version = 3
+entry-component = "browser"
+
+[backend]
+entrypoint = "backend/plugin.py"
+lifetime = "session"
+
+[[frontend-component]]
+component-name = "browser"
+title = "Workbench"
+entrypoint = "frontend/dist/browser/index.html"
+target-panel = "left"
+
+[[frontend-component]]
+component-name = "dataset-viewer"
+title = "Entries"
+entrypoint = "frontend/dist/dataset-viewer/index.html"
+target-panel = "right"
+
+[[frontend-component]]
+component-name = "entry-editor"
+title = "Entry"
+entrypoint = "frontend/dist/entry-editor/index.html"
+target-panel = "center"
+
+[dependencies]
+plugins = []

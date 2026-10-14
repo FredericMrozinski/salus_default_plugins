@@ -1,0 +1,9 @@
+/* Uses only the Salus theme variables: the page follows the light/dark theme without any code. */
+body { padding: var(--salus-space-3); }
+h1 { font-size: 15px; }
+.row { display: flex; flex-wrap: wrap; gap: var(--salus-space-2); margin-bottom: var(--salus-space-3); }
+input { min-width: 160px; }
+pre { margin: 0; padding: var(--salus-space-2); min-height: 120px; max-height: 50vh; overflow: auto;
+      background: var(--salus-surface); border: 1px solid var(--salus-border); border-radius: var(--salus-radius);
+      color: var(--salus-fg-muted); white-space: pre-wrap; }
+.muted { color: var(--salus-fg-faint); }

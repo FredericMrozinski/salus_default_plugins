@@ -1,0 +1,20 @@
+[description]
+name = "Test Plugin"
+developer = "Salus Organization"
+description = "This is a simple test plugin"
+contact = "frederic.mrozinski@tum.de"
+version = "0.0.0"
+
+
+[meta]
+api-version = 3
+entry-component = "main"
+
+[backend]
+entrypoint = "backend/src_python/plugin.py"
+lifetime = "session"
+
+[[frontend-component]]
+component-name = "main"
+entrypoint = "frontend/index.html"
+target-panel = "center"

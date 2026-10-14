@@ -1,0 +1,26 @@
+* { box-sizing: border-box; font-family: system-ui, sans-serif; }
+
+body {
+    margin: 0;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    background: #101216;
+    color: #cfd3dc;
+}
+
+#viewer {
+    flex: 1;
+    min-height: 0;
+    background: #101216;
+}
+
+#status {
+    padding: 6px 10px;
+    font-size: 12px;
+    border-top: 1px solid #262a33;
+    background: #171a20;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}

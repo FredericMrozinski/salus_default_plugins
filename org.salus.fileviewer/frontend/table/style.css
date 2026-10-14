@@ -1,0 +1,53 @@
+html, body, #app { height: 100%; }
+body { overflow: hidden; }
+#app { display: flex; flex-direction: column; }
+.bar { display: flex; gap: 8px; align-items: center; padding: 6px 8px; background: var(--salus-surface); border-bottom: 1px solid var(--salus-border); }
+.bar.pager { border-top: 1px solid var(--salus-border); border-bottom: 0; }
+.grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.message { padding: 24px; text-align: center; color: var(--salus-fg-muted); }
+.message.error { color: var(--salus-danger); }
+.infobox { padding: 8px 12px; border-bottom: 1px solid var(--salus-border); background: var(--salus-surface-alt); max-height: 30%; overflow: auto; font-size: 12px; }
+.infobox span { display: inline-block; margin: 2px 12px 2px 0; }
+.infobox code { color: var(--salus-accent); }
+.grid { flex: 1; min-height: 0; overflow: auto; }
+table { border-collapse: separate; border-spacing: 0; width: max-content; min-width: 100%; font-size: 12px; }
+th, td { padding: 3px 8px; border-bottom: 1px solid var(--salus-border); border-right: 1px solid var(--salus-border); max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+thead th { position: sticky; top: 0; background: var(--salus-surface-2); z-index: 2; cursor: pointer; user-select: none; }
+thead tr.filters th { top: 25px; background: var(--salus-surface); cursor: default; padding: 2px; z-index: 1; }
+thead tr.filters input { width: 100%; min-width: 60px; font-size: 11px; padding: 1px 4px; }
+th .arrow { color: var(--salus-accent); }
+td.null { color: var(--salus-fg-faint); font-style: italic; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; }
+tbody tr:nth-child(even) { background: var(--salus-surface-alt); }
+tbody tr:hover { background: var(--salus-surface-2); }
+
+/* Edit mode */
+.switch { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
+.edit-tools { display: none; align-items: center; gap: 8px; }
+.editing .edit-tools { display: inline-flex; }
+.editing #search, .editing #info, .editing #table, .editing #filters { display: none; }
+.dirty { color: var(--salus-warning); white-space: nowrap; }
+button.primary { background: var(--salus-accent); color: var(--salus-accent-fg); border-color: transparent; }
+button.tiny { padding: 0 5px; line-height: 16px; font-size: 12px; background: none; border-color: transparent; color: var(--salus-fg-muted); }
+button.tiny:hover:not(:disabled) { background: var(--salus-surface-3); color: var(--salus-fg); }
+.notice { padding: 6px 10px; border-bottom: 1px solid var(--salus-border); background: var(--salus-surface-alt); display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.notice.error { color: var(--salus-danger); border-bottom-color: var(--salus-danger); }
+.notice.ok { color: var(--salus-success); }
+.notice.conflict { border-bottom: 2px solid var(--salus-warning); background: var(--salus-surface-2); }
+.notice-text { margin-right: 4px; }
+.notice input.path { flex: 1; min-width: 260px; font-family: var(--salus-font-mono); font-size: 12px; }
+.path-hint { flex-basis: 100%; font-size: 12px; color: var(--salus-fg-muted); }
+.path-hint.warn { color: var(--salus-warning); }
+th.tools, td.tools { position: sticky; left: 0; z-index: 1; width: 1%; white-space: nowrap; background: var(--salus-surface); text-align: right; padding: 0 4px; }
+thead th.tools { z-index: 3; background: var(--salus-surface-2); }
+td.tools .rownum { color: var(--salus-fg-faint); font-size: 11px; margin-right: 2px; font-variant-numeric: tabular-nums; }
+td.tools button { visibility: hidden; }
+tr:hover td.tools button { visibility: visible; }
+th.edit-head { cursor: default; }
+th.edit-head .tiny { visibility: hidden; }
+th.edit-head:hover .tiny { visibility: visible; }
+.colname.unnamed { color: var(--salus-fg-faint); font-style: italic; }
+.editing td.cell { cursor: text; min-width: 60px; }
+.editing td.cell:hover { outline: 1px solid var(--salus-border); outline-offset: -1px; }
+textarea.cell-input { display: block; width: 100%; min-width: 140px; resize: none; font: inherit; padding: 1px 3px; margin: -2px 0; border-radius: 2px; }
+input.rename { width: 100%; min-width: 100px; font: inherit; }

@@ -1,0 +1,18 @@
+html, body { height: 100%; }
+body { display: flex; flex-direction: column; overflow: hidden; }
+.bar { display: flex; gap: 14px; align-items: center; padding: 6px 10px; background: var(--salus-surface); border-bottom: 1px solid var(--salus-border); }
+.bar .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nav, .zoom { display: flex; gap: 6px; align-items: center; white-space: nowrap; }
+.nav input { width: 4.5em; }
+.faint { color: var(--salus-fg-faint); }
+.message { padding: 24px; text-align: center; color: var(--salus-fg-muted); }
+.message.error { color: var(--salus-danger); }
+
+/* The pages are images drawn by the server; they cannot be selected, dragged or printed from here. */
+.pages { position: relative; flex: 1; min-height: 0; overflow: auto; cursor: grab; background: #525659; padding: 12px 0; user-select: none; -webkit-user-select: none; }
+.page { position: relative; margin: 0 auto 12px; background: #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5); }
+.page img { display: block; width: 100%; height: 100%; -webkit-user-drag: none; pointer-events: none; }
+.page .number { position: absolute; top: 6px; right: 8px; font-size: 11px; color: #999; }
+@media print { body { display: none; } }
+
+.pages.panning { cursor: grabbing; }

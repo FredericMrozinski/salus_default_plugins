@@ -1,0 +1,42 @@
+[description]
+name = "File Viewer"
+developer = "Salus Organization"
+description = "Viewers for files other plugins ask Salus to open: whole slide images, pictures (PNG, JPEG, ...), tables (CSV, JSON, SQLite) and PDFs."
+contact = "frederic.mrozinski@tum.de"
+version = "0.1.0"
+
+[meta]
+api-version = 3
+
+# One backend serves all viewers. There is no entry component: the viewers open when a file is opened.
+[backend]
+entrypoint = "backend/run.sh"
+lifetime = "session"
+
+[[frontend-component]]
+component-name = "slide"
+title = "Slide"
+entrypoint = "frontend/slide/index.html"
+target-panel = "center"
+file_viewer_for = ["svs", "tif", "tiff", "ndpi", "scn", "mrxs", "vms", "vmu", "bif"]
+
+[[frontend-component]]
+component-name = "image"
+title = "Image"
+entrypoint = "frontend/image/index.html"
+target-panel = "center"
+file_viewer_for = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "heic", "heif"]
+
+[[frontend-component]]
+component-name = "table"
+title = "Table"
+entrypoint = "frontend/table/index.html"
+target-panel = "center"
+file_viewer_for = ["csv", "tsv", "json", "jsonl", "ndjson", "sqlite", "sqlite3", "db"]
+
+[[frontend-component]]
+component-name = "pdf"
+title = "PDF"
+entrypoint = "frontend/pdf/index.html"
+target-panel = "center"
+file_viewer_for = ["pdf"]
