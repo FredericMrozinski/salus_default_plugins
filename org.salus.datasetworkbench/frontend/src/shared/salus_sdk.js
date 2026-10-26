@@ -820,7 +820,7 @@ function parentIdFromUrl(win) {
 /**
  * The plugin's own config directory, managed by Salus (`salus.config`).
  *
- * Every plugin gets one directory (below Salus' config directory, next to `salus.toml`) that survives
+ * Every plugin gets one directory (below Salus' config root, next to `salus.toml`) that survives
  * restarts and updates of the plugin. The frontend works on it through this class; the backend reads
  * and writes the same files directly (`plugin.config` in the Python SDK). All names are paths relative
  * to the directory, written with `/` (`"cache/index.json"`); parent directories are created on write.

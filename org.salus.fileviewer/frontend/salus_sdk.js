@@ -663,7 +663,18 @@ export class Http {
   #base;
   #fetch;
 
-  constructor(frontendId, { base = "", fetch: fetchFn } = {}) {
+  /**
+   * Prefix Salus is served under (for example `/user/me/salus` behind JupyterHub). A plugin page is
+   * always served from `<prefix>/plugins/...`, so the prefix is whatever precedes that.
+   * @param {string} pathname path of the plugin page
+   */
+  static prefixOf(pathname) {
+    const at = pathname.indexOf("/plugins/");
+    return at > 0 ? pathname.slice(0, at) : "";
+  }
+
+  constructor(frontendId, { base, fetch: fetchFn } = {}) {
+    base ??= Http.prefixOf(globalThis.location?.pathname ?? "");
     this.#base = `${base}/plugin-api/${frontendId}`;
     this.#fetch = fetchFn;
   }
@@ -802,6 +813,152 @@ function parentIdFromUrl(win) {
  * @property {typeof fetch} [fetch] for tests
  */
 
+// ---------------------------------------------------------------------------
+// Config directory
+// ---------------------------------------------------------------------------
+
+/**
+ * The plugin's own config directory, managed by Salus (`salus.config`).
+ *
+ * Every plugin gets one directory (below Salus' config root, next to `salus.toml`) that survives
+ * restarts and updates of the plugin. The frontend works on it through this class; the backend reads
+ * and writes the same files directly (`plugin.config` in the Python SDK). All names are paths relative
+ * to the directory, written with `/` (`"cache/index.json"`); parent directories are created on write.
+ * Names that would leave the directory (`..`, absolute paths) throw a `TypeError`.
+ *
+ * The directory belongs to the plugin, not to a user: all users of a plugin share it. Writes replace
+ * the file atomically. Failures other than a missing file throw `HttpError`.
+ */
+export class Config {
+  #base;
+  #fetch;
+
+  constructor(frontendId, { base, fetch: fetchFn } = {}) {
+    base ??= Http.prefixOf(globalThis.location?.pathname ?? "");
+    this.#base = `${base}/plugin-config/${frontendId}`;
+    this.#fetch = fetchFn;
+  }
+
+  /** @param {string} name */
+  #url(name, directory = false) {
+    if (typeof name !== "string") throw new TypeError(`config path must be a string: ${String(name)}`);
+    const parts = name === "" ? [] : name.split("/");
+    for (const part of parts) {
+      if (part === "" || part === "." || part === ".." || /[\\\0:]/.test(part)) {
+        throw new TypeError(`invalid config path: ${JSON.stringify(name)}`);
+      }
+    }
+    const path = parts.map(encodeURIComponent).join("/");
+    return path === "" ? this.#base : `${this.#base}/${path}${directory ? "/" : ""}`;
+  }
+
+  async #send(method, url, body) {
+    const init = { method, credentials: "same-origin", headers: {} };
+    if (body !== undefined) init.body = body;
+    return this.#fetch(url, init);
+  }
+
+  async #check(response) {
+    if (response.ok) return response;
+    let body;
+    try {
+      body = await response.text();
+    } catch {
+      body = undefined;
+    }
+    throw new HttpError(response, body);
+  }
+
+  /**
+   * Content of a file, or `null` if it does not exist.
+   * @param {string} name
+   * @returns {Promise<Uint8Array | null>}
+   */
+  async readBytes(name) {
+    const response = await this.#send("GET", this.#url(name));
+    if (response.status === 404) return null;
+    return new Uint8Array(await (await this.#check(response)).arrayBuffer());
+  }
+
+  /**
+   * Content of a text file, or `null` if it does not exist.
+   * @param {string} name
+   * @returns {Promise<string | null>}
+   */
+  async readText(name) {
+    const bytes = await this.readBytes(name);
+    return bytes === null ? null : textDecoder.decode(bytes);
+  }
+
+  /**
+   * Parsed JSON file; `fallback` (default `null`) if it does not exist.
+   * @param {string} name
+   * @param {unknown} [fallback]
+   */
+  async readJson(name, fallback = null) {
+    const text = await this.readText(name);
+    return text === null ? fallback : loads(text);
+  }
+
+  /**
+   * Writes a file (replacing it). Strings are stored as UTF-8.
+   * @param {string} name
+   * @param {string | Uint8Array | ArrayBuffer | Blob | Payload} data
+   */
+  async writeBytes(name, data) {
+    if (name === "") throw new TypeError("a file name is required");
+    await this.#check(await this.#send("PUT", this.#url(name), data instanceof Payload ? data.asBytes() : data));
+  }
+
+  /**
+   * @param {string} name
+   * @param {string} text
+   */
+  writeText(name, text) {
+    return this.writeBytes(name, textEncoder.encode(text));
+  }
+
+  /**
+   * @param {string} name
+   * @param {unknown} value
+   */
+  writeJson(name, value) {
+    return this.writeText(name, JSON.stringify(value, null, 2));
+  }
+
+  /**
+   * Whether a file or directory exists.
+   * @param {string} name
+   */
+  async exists(name) {
+    if (name === "") return true;
+    const parent = name.includes("/") ? name.slice(0, name.lastIndexOf("/")) : "";
+    const leaf = name.slice(name.lastIndexOf("/") + 1);
+    const names = await this.list(parent);
+    return names.includes(leaf) || names.includes(`${leaf}/`);
+  }
+
+  /**
+   * Names in a directory, sorted; directories end with `/`. A directory that does not exist is empty.
+   * @param {string} [directory]
+   * @returns {Promise<string[]>}
+   */
+  async list(directory = "") {
+    const response = await this.#check(await this.#send("GET", `${this.#url(directory)}${directory === "" ? "?list" : "/?list"}`));
+    return (await response.json()).map((entry) => (entry.is_dir ? `${entry.name}/` : entry.name));
+  }
+
+  /**
+   * Deletes a file, or a directory with everything in it. Throws `HttpError` (404) if it does not exist.
+   * @param {string} name
+   */
+  async delete(name) {
+    if (name === "") throw new TypeError("cannot delete the config directory itself");
+    await this.#check(await this.#send("DELETE", this.#url(name)));
+  }
+}
+
+
 /**
  * Connection of this plugin frontend to the framework (and through it, to the backend).
  */
@@ -842,6 +999,9 @@ export class Salus {
 
     /** HTTP access to the routes the backend opened. */
     this.http = new Http(frontendId, { fetch: options.fetch ?? ((...args) => win.fetch(...args)) });
+
+    /** This plugin's config directory (see `Config`). */
+    this.config = new Config(frontendId, { fetch: options.fetch ?? ((...args) => win.fetch(...args)) });
 
     this.#parentId = options.parentFrontendId ?? parentIdFromUrl(win);
     /** Name of this frontend's component (from the manifest), or null if unknown. */
