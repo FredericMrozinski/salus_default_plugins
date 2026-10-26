@@ -21,11 +21,18 @@ frontend/  slide/, image/, table/, pdf/ (plain HTML + ES modules, no build step)
 
 ## Setup
 
-The slide viewer needs OpenSlide and Pillow, the image viewer Pillow, the PDF viewer needs pypdfium2 (Python 3.10+). The table viewer uses the standard library only; each viewer reports a clear error if its library is missing and the others keep working.
+The slide viewer needs OpenSlide and Pillow, the image viewer Pillow, the PDF viewer pypdfium2 (Python 3.10+). The table viewer uses the standard library only.
+They live in a virtualenv, which you create **on the machine that runs Salus**:
 
 ```sh
 backend/setup.sh        # creates backend/.venv
 ```
+
+**A virtualenv cannot be copied to another machine** (it holds that machine's Python and compiled libraries). When you deploy the plugin elsewhere, leave
+`backend/.venv` out (for example `rsync --exclude .venv`) and run `setup.sh` there.
+
+Without a working `backend/.venv` the backend does not start (the launcher says "virtualenv missing. Run backend/setup.sh first." in the server log), and Salus
+answers **503 Service Unavailable** after waiting ten seconds for it. If every viewer of this plugin fails like that, run `setup.sh`.
 
 Manifest and backend changes need a server restart.
 

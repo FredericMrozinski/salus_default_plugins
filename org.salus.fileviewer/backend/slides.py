@@ -132,7 +132,7 @@ class Slides:
     def open(self, file: str) -> Slide:
         """Opens (or finds) the slide for a file path."""
         if openslide is None:
-            raise ViewerError(f"The image viewer needs OpenSlide, which is not installed ({IMPORT_ERROR}). Run backend/setup.sh.", 503)
+            raise ViewerError(f"The slide viewer needs OpenSlide, which is not installed ({IMPORT_ERROR}). Run backend/setup.sh.", 503)
         path = Path(file).expanduser()
         if path.suffix.lower() not in SLIDE_SUFFIXES or not path.is_file():
             raise ViewerError("That is not a slide file on the server.", 404)

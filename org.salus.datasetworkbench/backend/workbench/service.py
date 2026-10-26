@@ -76,6 +76,21 @@ class Workbench:
 
         return self.start_job("scan", source_id, work)
 
+    def scan_all(self) -> dict:
+        """Starts a scan of every source (the Refresh button); sources that are being scanned already are skipped."""
+        started = 0
+        for source_id in self.catalog.source_ids():
+            try:
+                if not self.scan_source(source_id)["running"]:
+                    started += 1
+            except WorkbenchError:
+                continue  # a broken source must not keep the others from being read
+        return {"started": started, "running": self.running_jobs()}
+
+    def running_jobs(self) -> int:
+        with self._guard:
+            return len(self._running)
+
     def source_changed(self, source_id: str) -> None:
         """After a scan, an ingest or an upload: refreshes the states of all cells that reference the source."""
         self.notify({"type": "source_changed", "source": source_id})

@@ -128,6 +128,15 @@ function useDropTarget(to: string, onOver: (over: boolean) => void) {
   };
 }
 
+/** Waits until the backend has no running jobs (asks it, since events do not always arrive). */
+async function waitForJobs() {
+  for (let i = 0; i < 600; i++) {
+    const { running } = await api<{ running: number }>("GET", "/jobs");
+    if (!running) return;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+}
+
 export function SourcesTab() {
   const tree = useTree();
   const [selectedGroup, setSelectedGroup] = useState("");
@@ -147,6 +156,21 @@ export function SourcesTab() {
     },
     onError: (error) => window.alert(error instanceof Error ? error.message : String(error)),
   });
+  const [refreshing, setRefreshing] = useState(false);
+  // Rescans every source, then waits for the scans by asking the backend (not by waiting for events,
+  // which do not always arrive) and reloads what is shown.
+  const refresh = async () => {
+    setRefreshing(true);
+    try {
+      await api("POST", "/scan");
+      await waitForJobs();
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRefreshing(false);
+      queryClient.invalidateQueries();
+    }
+  };
   const drag: Drag = { dragging, setDragging, drop: (to) => dragging && (setDragging(null), move.mutate({ path: dragging, to })) };
 
   return (
@@ -166,7 +190,7 @@ export function SourcesTab() {
         <span className="grow faint" title="Where new folders and source cohorts go. Click a folder to choose it.">
           {selectedGroup ? `in ${selectedGroup}` : ""}
         </span>
-        <button className="icon-button" title="Refresh" onClick={() => queryClient.invalidateQueries({ queryKey: ["tree"] })}>
+        <button className="icon-button" title="Refresh: look for changed files in all source cohorts" disabled={refreshing} onClick={refresh}>
           <Icon name="refresh" size={22} />
         </button>
       </div>
@@ -187,7 +211,7 @@ export function SourcesTab() {
           showMenu(e, [
             ...newItems("", setDialog, { folder: "New folder", file: "New general source cohort", table: "New tabular source cohort" }),
             "separator",
-            { label: "Refresh", icon: <Icon name="refresh" />, onSelect: () => queryClient.invalidateQueries({ queryKey: ["tree"] }) },
+            { label: "Refresh", icon: <Icon name="refresh" />, onSelect: refresh },
             "separator",
             { label: "Workbench folder…", onSelect: openRootDialog },
           ])
@@ -390,11 +414,15 @@ function Group({ node, depth, selected, onSelect, onDialog }: NodeProps & { node
 }
 
 function Source({ node, depth, onDialog }: NodeProps & { node: SourceNode }) {
+  const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const job = useJob(node.id);
   const scan = useMutation({
-    mutationFn: () => api("POST", `/sources/${encode(node.id!)}/scan`),
-    onError: () => undefined,
+    mutationFn: async () => {
+      await api("POST", `/sources/${encode(node.id!)}/scan`);
+      await waitForJobs();
+    },
+    onSettled: () => queryClient.invalidateQueries(),
   });
   const isFile = node.kind === "file";
   const broken = node.state === "broken";

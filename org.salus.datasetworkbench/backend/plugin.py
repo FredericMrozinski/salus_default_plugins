@@ -239,6 +239,16 @@ def scan(req):
     return wb.scan_source(req.params["id"])
 
 
+@route("POST", "/scan")
+def scan_all(req):
+    return wb.scan_all()
+
+
+@route("GET", "/jobs")
+def jobs(req):
+    return {"running": wb.running_jobs()}
+
+
 @route("GET", "/sources/{id}/files")
 def files(req):
     source = wb.catalog.find_source(req.params["id"])

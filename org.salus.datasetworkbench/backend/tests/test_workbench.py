@@ -51,6 +51,14 @@ class CatalogTests(Base):
         self.assertEqual(tree[0]["type"], "group")
         self.assertEqual(tree[0]["children"][0]["name"], "wsi")
 
+    def test_scan_all_adopts_files_added_by_hand_in_every_source(self):
+        one, two = self.file_source("one"), self.file_source("two")
+        write(one.path / "sub/a.svs", b"a")
+        write(two.path / "b.svs", b"b")
+        self.assertEqual(self.wb.scan_all()["started"], 2)
+        self.assertEqual(one.info()["items"], 1)
+        self.assertEqual(two.info()["items"], 1)
+
     def test_rejects_unsafe_names(self):
         for bad in ("../x", "a/b", ".hidden", "", "x" * 200):
             with self.assertRaises(WorkbenchError):
