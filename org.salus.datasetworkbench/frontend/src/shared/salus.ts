@@ -1,4 +1,5 @@
 import { Payload, Salus } from "./salus_sdk.js";
+import { explainFailure } from "./gatewayErrors";
 import type { Nav, WorkbenchEvent } from "./types";
 
 // Everything here runs when the page loads, before React renders: messages from other components are
@@ -28,8 +29,8 @@ export async function api<T = unknown>(
     signal: options.signal,
   });
   if (!response.ok) {
-    const text = (await response.text().catch(() => "")) || response.statusText;
-    throw new ApiError(response.status, text);
+    const body = await response.text().catch(() => "");
+    throw new ApiError(response.status, explainFailure(response.status, body, response.statusText, method, path));
   }
   if (response.status === 204) return undefined as T;
   const type = response.headers.get("content-type") ?? "";
