@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import "../shared/salus";
 import { queryClient } from "../shared/hooks";
 import { MenuProvider } from "../shared/menu";
+import { RootDialog, RootGuard } from "../shared/settings";
 import { App } from "./App";
 import { setOnBatchDone } from "./uploadQueue";
 import "./browser.css";
@@ -17,7 +18,10 @@ createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <MenuProvider>
-        <App />
+        <RootGuard>
+          <App />
+          <RootDialog />
+        </RootGuard>
       </MenuProvider>
     </QueryClientProvider>
   </StrictMode>,

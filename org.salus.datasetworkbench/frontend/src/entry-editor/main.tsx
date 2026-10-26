@@ -3,13 +3,16 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "../shared/salus";
 import { queryClient } from "../shared/hooks";
+import { RootGuard } from "../shared/settings";
 import { App } from "../editor/App";
 import "../editor/editor.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <App />
+      <RootGuard>
+        <App />
+      </RootGuard>
     </QueryClientProvider>
   </StrictMode>,
 );

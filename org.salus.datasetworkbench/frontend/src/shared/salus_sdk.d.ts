@@ -242,6 +242,34 @@ export type SalusOptions = {
  * @property {typeof fetch} [fetch] for tests
  */
 /**
+ * The plugin's own config directory, managed by Salus (`salus.config`). Names are `/`-separated paths
+ * relative to the directory; names leaving it throw a `TypeError`. Failures other than a missing file
+ * throw `HttpError`. The directory is shared by all users of the plugin; writes are atomic.
+ */
+export declare class Config {
+    #private;
+    constructor(frontendId: number, { base, fetch: fetchFn }?: {
+        base?: string;
+        fetch?: typeof fetch;
+    });
+    /** Content of a file, or `null` if it does not exist. */
+    readBytes(name: string): Promise<Uint8Array | null>;
+    /** Content of a text file, or `null` if it does not exist. */
+    readText(name: string): Promise<string | null>;
+    /** Parsed JSON file; `fallback` (default `null`) if it does not exist. */
+    readJson(name: string, fallback?: unknown): Promise<any>;
+    /** Writes a file (replacing it). Parent directories are created. */
+    writeBytes(name: string, data: string | Uint8Array | ArrayBuffer | Blob | Payload): Promise<void>;
+    writeText(name: string, text: string): Promise<void>;
+    writeJson(name: string, value: unknown): Promise<void>;
+    /** Whether a file or directory exists. */
+    exists(name: string): Promise<boolean>;
+    /** Names in a directory, sorted; directories end with `/`. A directory that does not exist is empty. */
+    list(directory?: string): Promise<string[]>;
+    /** Deletes a file, or a directory with everything in it. Throws `HttpError` (404) if it does not exist. */
+    delete(name: string): Promise<void>;
+}
+/**
  * Connection of this plugin frontend to the framework (and through it, to the backend).
  */
 export declare class Salus {
@@ -250,6 +278,8 @@ export declare class Salus {
     frontendId: number | undefined;
     /** HTTP access to the routes the backend opened. */
     http: Http;
+    /** This plugin's config directory (see `Config`). */
+    config: Config;
     /** Name of this frontend's component (from the manifest), or null if unknown. */
     component: string | null;
     /** What this component was opened with (`params` of `openComponent`, or `{file}` for viewers), or null. */

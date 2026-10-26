@@ -1,15 +1,24 @@
-import { QueryClient } from "@tanstack/react-query";
+import { QueryCache, QueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { onEvent } from "./salus";
+import { ApiError, onEvent } from "./salus";
 import type { WorkbenchEvent } from "./types";
 
-export const queryClient = new QueryClient({
+export const queryClient: QueryClient = new QueryClient({
+  // Any answer "the workbench folder is not set up" means the setup screen is due: look at the settings again.
+  queryCache: new QueryCache({
+    onError: (error) => {
+      if (error instanceof ApiError && error.status === 412) queryClient.invalidateQueries({ queryKey: ["settings"] });
+    },
+  }),
   defaultOptions: { queries: { staleTime: 5_000, refetchOnWindowFocus: false, retry: 1 } },
 });
 
 // Backend events make the cached views stale; active views refetch.
 onEvent((event) => {
   switch (event.type) {
+    case "config_changed": // another folder: nothing shown so far is valid any more
+      queryClient.invalidateQueries();
+      break;
     case "tree_changed":
       queryClient.invalidateQueries({ queryKey: ["tree"] });
       queryClient.invalidateQueries({ queryKey: ["search"] });

@@ -10,12 +10,6 @@ from pathlib import Path
 from .sources import SOURCE_DB, FileSource, Source, TableSource, hidden, open_source
 from .util import NotFound, WorkbenchError, check_name, meta_set, rename_on_disk, resolve_inside, safe_rel_path
 
-DEFAULT_ROOT = Path.home() / "SalusWorkbench"
-
-
-def workbench_root() -> Path:
-    return Path(os.environ.get("SALUS_WORKBENCH_ROOT") or DEFAULT_ROOT).expanduser()
-
 
 class Catalog:
     def __init__(self, root: Path):

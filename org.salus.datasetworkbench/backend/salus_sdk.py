@@ -7,6 +7,7 @@ import itertools
 import json
 import logging
 import os
+import pathlib
 import struct
 import sys
 import tempfile
@@ -748,6 +749,127 @@ async def _invoke(handler: Callable, arg):
 
 
 # ---------------------------------------------------------------------------
+# Config directory
+# ---------------------------------------------------------------------------
+
+CONFIG_DIR_ENV = "SALUS_CONFIG_DIR"
+
+
+class Config:
+    """The plugin's own config directory, managed by Salus.
+
+    Every plugin gets one directory (below Salus' config directory, next to `salus.toml`) that
+    survives restarts and updates of the plugin. The backend works on it directly; the frontend
+    reaches the same files through `salus.config` in the JavaScript SDK. All names are paths
+    relative to the directory, written with `/` (`"cache/index.json"`); parent directories are
+    created on write. Names that would leave the directory (`..`, absolute paths) raise
+    `ValueError`.
+
+    The directory belongs to the plugin, not to a user: all users of a plugin share it.
+    Writes replace the file atomically, so a reader never sees half a file.
+
+    Get it as `plugin.config`.
+    """
+
+    def __init__(self, directory: str | os.PathLike | None = None):
+        if directory is None:
+            directory = os.environ.get(CONFIG_DIR_ENV)
+            if not directory:
+                raise RuntimeError(f"{CONFIG_DIR_ENV} is not set; the plugin must be started by Salus")
+        self._dir = pathlib.Path(directory)
+        self._dir.mkdir(parents=True, exist_ok=True)
+        self._root = self._dir.resolve()
+
+    @property
+    def path(self) -> pathlib.Path:
+        """The directory itself, for libraries that want a path."""
+        return self._dir
+
+    def path_of(self, name: str) -> pathlib.Path:
+        """The file system path of `name`. Raises `ValueError` if it would leave the directory."""
+        parts = name.split("/") if name else []
+        for part in parts:
+            if part in ("", ".", "..") or any(c in part for c in "\\\0:"):
+                raise ValueError(f"invalid config path: {name!r}")
+        target = self._dir.joinpath(*parts)
+        if not target.resolve().is_relative_to(self._root):
+            raise ValueError(f"config path leaves the config directory: {name!r}")
+        return target
+
+    def exists(self, name: str) -> bool:
+        return self.path_of(name).exists()
+
+    def read_bytes(self, name: str, default=None) -> bytes:
+        """Content of a file. Returns `default` if given and the file does not exist, else raises `FileNotFoundError`."""
+        try:
+            return self.path_of(name).read_bytes()
+        except FileNotFoundError:
+            if default is not None:
+                return default
+            raise
+
+    def read_text(self, name: str, default: str | None = None, encoding: str = "utf-8") -> str:
+        try:
+            return self.path_of(name).read_text(encoding=encoding)
+        except FileNotFoundError:
+            if default is not None:
+                return default
+            raise
+
+    def read_json(self, name: str, default=None):
+        """Parsed JSON file. A missing file gives `default` (`None` unless set)."""
+        try:
+            return json.loads(self.path_of(name).read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return default
+
+    def write_bytes(self, name: str, data: bytes | bytearray | memoryview | Payload) -> None:
+        if not name:
+            raise ValueError("a file name is required")
+        target = self.path_of(name)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temp = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", suffix=".tmp")
+        try:
+            with os.fdopen(descriptor, "wb") as file:
+                file.write(_to_buffer(data))
+            os.replace(temp, target)
+        except BaseException:
+            try:
+                os.unlink(temp)
+            except FileNotFoundError:
+                pass
+            raise
+
+    def write_text(self, name: str, text: str, encoding: str = "utf-8") -> None:
+        self.write_bytes(name, text.encode(encoding))
+
+    def write_json(self, name: str, value, indent: int | None = 2) -> None:
+        self.write_text(name, json.dumps(value, indent=indent, ensure_ascii=False))
+
+    def list(self, directory: str = "") -> list[str]:
+        """Names in a directory, sorted; directories end with `/`. A directory that does not exist is empty."""
+        target = self.path_of(directory)
+        if not target.is_dir():
+            return []
+        return sorted(
+            entry.name + ("/" if entry.is_dir() else "")
+            for entry in target.iterdir()
+            if not (entry.name.startswith(".") and entry.name.endswith(".tmp"))
+        )
+
+    def delete(self, name: str) -> None:
+        """Deletes a file, or a directory with everything in it. Raises `FileNotFoundError` if missing."""
+        if not name:
+            raise ValueError("cannot delete the config directory itself")
+        target = self.path_of(name)
+        if target.is_dir() and not target.is_symlink():
+            import shutil
+            shutil.rmtree(target)
+        else:
+            target.unlink()
+
+
+# ---------------------------------------------------------------------------
 # Plugin
 # ---------------------------------------------------------------------------
 
@@ -865,6 +987,14 @@ class Plugin:
         self._detached_handlers: list[Callable] = []
         self._unclaimed: asyncio.Queue = asyncio.Queue()
         self._unclaimed_consumer = False
+        self._config: Config | None = None
+
+    @property
+    def config(self) -> Config:
+        """The plugin's config directory (see `Config`). Created on first use."""
+        if self._config is None:
+            self._config = Config()
+        return self._config
 
     # -- channels ----------------------------------------------------------
 

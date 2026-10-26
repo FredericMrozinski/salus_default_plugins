@@ -1,7 +1,7 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useDebounced } from "../shared/hooks";
-import { api, encode, initialNav, navigate, onNav, setState } from "../shared/salus";
+import { api, encode, initialNav, navigate, onEvent, onNav, setState } from "../shared/salus";
 import type { DatasetDetail, EntryPage, EntryRow, EntryState, Nav, Stats } from "../shared/types";
 import { Badge, Empty, ErrorLine } from "../shared/ui";
 
@@ -21,7 +21,10 @@ export function App() {
     const initial = initialNav();
     if (initial) apply(initial);
     else api<{ dataset: string | null; entry: number | null }>("GET", "/state").then((s) => (setDataset(s.dataset), setSelected(s.entry))).catch(() => undefined);
-    return onNav(apply);
+    const stopNav = onNav(apply);
+    // another workbench folder: what was open belongs to the old one
+    const stopEvents = onEvent((e) => e.type === "config_changed" && (setDataset(null), setSelected(null)));
+    return () => (stopNav(), stopEvents());
   }, []);
 
   if (!dataset) return <Empty>Choose a dataset in the Workbench to see its entries.</Empty>;

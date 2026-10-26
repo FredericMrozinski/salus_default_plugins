@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
-import { api, encode, navigate, setState } from "../shared/salus";
+import { useEffect, useState } from "react";
+import { api, encode, navigate, onEvent, setState } from "../shared/salus";
 import type { DatasetDetail, DatasetSummary } from "../shared/types";
 import { Icon } from "../shared/icons";
 import { useMenu } from "../shared/menu";
+import { openRootDialog } from "../shared/settings";
 import { Badge, Empty, ErrorLine, Field, Modal } from "../shared/ui";
 import { RenameDialog } from "./dialogs";
 
@@ -15,6 +16,7 @@ export function DatasetsTab() {
   const [deleting, setDeleting] = useState<DatasetSummary | null>(null);
   const [renaming, setRenaming] = useState<DatasetSummary | null>(null);
   const showMenu = useMenu();
+  useEffect(() => onEvent((e) => e.type === "config_changed" && setSelected(null)), []);
 
   const open = async (id: string, editSchema = false) => {
     setSelected(id);
@@ -43,7 +45,7 @@ export function DatasetsTab() {
           <Icon name="refresh" size={22} />
         </button>
       </div>
-      <div className="scroll" onContextMenu={(e) => showMenu(e, [{ label: "New dataset…", icon: <Icon name="add" />, onSelect: () => setCreating(true) }, { label: "Refresh", icon: <Icon name="refresh" />, onSelect: () => queryClient.invalidateQueries({ queryKey: ["datasets"] }) }])}>
+      <div className="scroll" onContextMenu={(e) => showMenu(e, [{ label: "New dataset…", icon: <Icon name="add" />, onSelect: () => setCreating(true) }, { label: "Refresh", icon: <Icon name="refresh" />, onSelect: () => queryClient.invalidateQueries({ queryKey: ["datasets"] }) }, "separator", { label: "Workbench folder…", onSelect: openRootDialog }])}>
         <ErrorLine error={datasets.error} />
         {datasets.isLoading && <Empty>Loading…</Empty>}
         {datasets.data?.length === 0 && <Empty>No datasets yet.</Empty>}

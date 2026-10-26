@@ -101,6 +101,7 @@ export type Nav =
 
 export type WorkbenchEvent =
   | { type: "tree_changed" }
+  | { type: "config_changed" }
   | { type: "source_changed"; source: string }
   | { type: "dataset_changed"; dataset: string; entry?: number; schema?: boolean; deleted?: boolean }
   | { type: "state"; dataset: string | null; entry: number | null }

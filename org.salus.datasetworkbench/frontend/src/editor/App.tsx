@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { api, encode, initialNav, onNav } from "../shared/salus";
+import { api, encode, initialNav, onEvent, onNav } from "../shared/salus";
 import type { DatasetDetail, Nav } from "../shared/types";
 import { Empty, ErrorLine } from "../shared/ui";
 import { EntryForm } from "./EntryForm";
@@ -23,7 +23,9 @@ export function App() {
       api<{ dataset: string | null; entry: number | null }>("GET", "/state")
         .then((s) => s.dataset && setView({ dataset: s.dataset, entry: s.entry, mode: "entry" }))
         .catch(() => undefined);
-    return onNav(apply);
+    const stopNav = onNav(apply);
+    const stopEvents = onEvent((e) => e.type === "config_changed" && setView({ dataset: null, entry: null, mode: "entry" }));
+    return () => (stopNav(), stopEvents());
   }, []);
 
   const detail = useQuery({
