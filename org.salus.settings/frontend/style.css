@@ -1,0 +1,23 @@
+html, body { height: 100%; }
+body { display: flex; margin: 0; }
+#targets { display: flex; flex-direction: column; gap: 2px; flex: 0 0 220px; padding: var(--salus-space-2); overflow-y: auto;
+           border-right: 1px solid var(--salus-border); background: var(--salus-surface-alt); box-sizing: border-box; }
+#targets button { text-align: left; border: none; background: transparent; padding: 7px var(--salus-space-2); border-radius: var(--salus-radius);
+                  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+#targets button:hover { background: var(--salus-surface-2); }
+#targets button.selected { background: var(--salus-accent); color: var(--salus-accent-fg); }
+#targets .separator { margin: var(--salus-space-1) var(--salus-space-2); border-top: 1px solid var(--salus-border); }
+#detail { flex: 1; min-width: 0; padding: var(--salus-space-3) var(--salus-space-4); overflow-y: auto; box-sizing: border-box; }
+h1 { margin: 0 0 var(--salus-space-3); font-size: 18px; }
+.muted { color: var(--salus-fg-faint); }
+.setting { max-width: 640px; padding: var(--salus-space-3) 0; border-bottom: 1px solid var(--salus-border); }
+.setting .head { display: flex; align-items: baseline; gap: var(--salus-space-2); margin-bottom: 4px; }
+.setting label { font-weight: 600; }
+.setting .key { color: var(--salus-fg-faint); font-family: var(--salus-font-mono); font-size: 0.85em; }
+.setting .description { margin: 0 0 var(--salus-space-2); color: var(--salus-fg-muted); white-space: pre-wrap; }
+.setting .control { display: flex; align-items: center; gap: var(--salus-space-2); }
+.setting .control input[type="text"], .setting .control input[type="number"], .setting .control select { flex: 1; min-width: 0; }
+.setting .control input[type="text"].path { font-family: var(--salus-font-mono); }
+.setting .hint { color: var(--salus-fg-faint); font-size: 0.85em; margin-top: 4px; }
+.setting .error { color: var(--salus-danger); margin-top: 4px; }
+.setting .saved { color: var(--salus-success); font-size: 0.85em; }

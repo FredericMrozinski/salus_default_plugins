@@ -3,11 +3,15 @@ name = "Dataset Workbench"
 developer = "Salus Organization"
 description = "Organize raw data in sources and bundle it into datasets for machine learning."
 contact = "frederic.mrozinski@tum.de"
+icon = "icon.svg"
 version = "0.1.0"
 
 [meta]
 api-version = 3
 entry-component = "browser"
+
+[config]
+configurable = "configurable.toml"
 
 [backend]
 entrypoint = "backend/plugin.py"

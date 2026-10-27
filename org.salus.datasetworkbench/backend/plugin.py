@@ -4,9 +4,10 @@
 All catalog logic lives in the `workbench` package (no Salus dependency, unit-tested); this file only maps
 HTTP routes to it and broadcasts change events on the `events` channel.
 
-Configuration: the workbench folder is stored in the plugin's config directory (settings.json, {"root": "/path"}), which Salus
-provides (`app.config`). Without it the data routes answer 412 and the frontends ask the user for the folder (PUT /settings).
+Configuration: the workbench folder is the `root` setting of the plugin (configurable.toml), which the user sets in Salus' settings
+(`app.config`). Until it is set the data routes answer 412 and the frontends say where to set it.
 """
+import asyncio
 import faulthandler
 import logging
 import signal
@@ -31,14 +32,8 @@ def notify(event: dict) -> None:
         log.debug("event not delivered: %s", event, exc_info=True)
 
 
-try:
-    settings = RootSettings(app.config)
-    unavailable = None
-except RuntimeError as e:  # started without a config directory (an old Salus, or by hand)
-    settings, unavailable = None, str(e)
-
-wb = Active(settings, notify, unavailable)  # use it like a Workbench; it is the one for the configured folder
-wb.load()
+settings = RootSettings(app.config)
+wb = Active(settings, notify)  # use it like a Workbench; it is the one for the configured folder
 
 
 def api(handler):
@@ -93,26 +88,11 @@ def config(req):
     return {"root": str(wb.catalog.root), "chunk_size": CHUNK_SIZE}
 
 
-# --------------------------------------------------------------------------- the workbench folder (needs no folder to exist)
+# --------------------------------------------------------------------------- the workbench folder setting (needs no folder to exist)
 
 @route("GET", "/settings")
 def get_settings(req):
-    """{root: the stored folder or null, active: whether it is in use, error, suggestion ...}"""
-    return wb.status()
-
-
-@route("POST", "/settings/check")
-def check_settings(req):
-    """What choosing a folder would do (for the hint next to the input): {path, exists, will_create, has_workbench, has_files, problem}."""
-    if settings is None:
-        raise salus.HTTPError(500, unavailable or "No config directory.")
-    return settings.check(body(req).get("root"))
-
-
-@route("PUT", "/settings")
-def put_settings(req):
-    """Makes the given folder the workbench folder: it is created if needed, taken into use and stored in the config file."""
-    wb.use(body(req).get("root"))
+    """{root: the folder set in the settings or null, active: whether it is in use, error: why it cannot be used}"""
     return wb.status()
 
 
@@ -427,6 +407,9 @@ def candidates(req):
 
 
 async def main(plugin):
+    # Reading the setting asks Salus, which needs the running connection: so not while this module loads. A request that comes in
+    # before this is done finds the setting itself (`wb.status()`).
+    await asyncio.to_thread(wb.load)
     log.info("Workbench folder: %s", wb.root or "not set up yet")
 
 

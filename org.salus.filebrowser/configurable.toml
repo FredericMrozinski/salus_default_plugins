@@ -1,0 +1,15 @@
+# What can be configured in the file browser (see docs/guides/config.md). Never changed at runtime.
+
+[[setting]]
+key = "start_directory"
+name = "Start folder"
+description = "The folder the browser opens in. Empty means the home folder of the user running Salus."
+type = "directory-path"
+default = ""
+
+[[setting]]
+key = "show_hidden"
+name = "Show hidden files"
+description = "List files and folders whose names start with a dot."
+type = "bool"
+default = true

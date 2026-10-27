@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>File Browser</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <button id="up" title="Parent folder" aria-label="Parent folder" disabled><svg viewBox="0 -960 960 960" fill="currentColor" aria-hidden="true"><path d="M460-200v-483.15L228.31-451.46 200-480l280-280 280 280-28.31 28.54L500-683.15V-200h-40Z"/></svg></button>
+        <button id="home" title="Home folder" aria-label="Home folder"><svg viewBox="0 -960 960 960" fill="currentColor" aria-hidden="true"><path d="M240-200h147.69v-235.38h184.62V-200H720v-360L480-741.54 240-560v360Zm-40 40v-420l280-211.54L760-580v420H532.31v-235.38H427.69V-160H200Zm280-310.77Z"/></svg></button>
+        <input id="path" spellcheck="false" aria-label="Path">
+        <button id="refresh" title="Reload" aria-label="Reload"><svg viewBox="0 -960 960 960" fill="currentColor" aria-hidden="true"><path d="M483.08-200q-117.25 0-198.63-81.34-81.37-81.34-81.37-198.54 0-117.2 81.37-198.66Q365.83-760 483.08-760q71.3 0 133.54 33.88 62.23 33.89 100.3 94.58V-760h40v209.23H547.69v-40h148q-31.23-59.85-87.88-94.54Q551.15-720 483.08-720q-100 0-170 70t-70 170q0 100 70 170t170 70q77 0 139-44t87-116h42.46Q725.08-310.15 651-255.08 576.92-200 483.08-200Z"/></svg></button>
+    </header>
+    <div id="message" hidden></div>
+    <ul id="entries"></ul>
+    <script type="module" src="script.js"></script>
+</body>
+</html>

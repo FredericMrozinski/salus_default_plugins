@@ -1,0 +1,9 @@
+# What can be configured in the Dataset Workbench (shown under Settings in Salus).
+
+[[setting]]
+key = "root"
+name = "Workbench folder"
+description = """The folder on the server where the workbench keeps its data: the source cohorts in a folder "sources" and the datasets in a folder "datasets". \\
+Use the full path of a folder on a local disk of the server (the databases in it do not work reliably on network drives). It is created if it does not exist; \\
+nothing in it is deleted when you choose another folder."""
+type = "directory-path"

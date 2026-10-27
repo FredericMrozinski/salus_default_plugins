@@ -1,0 +1,93 @@
+/* Salus adds its theme stylesheet to the page after it has loaded. These rules (with the dark theme as the fallback)
+   keep the page readable before that and if it does not arrive. */
+body { background: var(--salus-bg, #14161b); color: var(--salus-fg, #e6e6e6); font: var(--salus-font-size, 13px) var(--salus-font, system-ui, sans-serif); margin: 0; }
+button, input, select, textarea { font: inherit; color: var(--salus-fg, #e6e6e6); }
+button { padding: 4px 12px; background: var(--salus-surface-2, #23262e); border: 1px solid var(--salus-border, #2a2d35); border-radius: var(--salus-radius, 6px); cursor: pointer; }
+button:hover:not(:disabled) { background: var(--salus-surface-3, #33373f); }
+button:disabled { opacity: .5; cursor: default; }
+input, select, textarea { padding: 4px 8px; background: var(--salus-surface, #1b1e25); border: 1px solid var(--salus-border, #2a2d35); border-radius: var(--salus-radius, 6px); }
+input[type=checkbox], input[type=radio] { padding: 0; }
+html, body, #app { height: 100%; }
+body { overflow: hidden; }
+#app { display: flex; flex-direction: column; }
+
+.steps { display: flex; gap: 4px; padding: 10px 16px; border-bottom: 1px solid var(--salus-border); background: var(--salus-surface); align-items: center; }
+.step { display: flex; align-items: center; gap: 8px; color: var(--salus-fg-faint); }
+.step .num { width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--salus-border); display: grid; place-items: center; font-size: 12px; }
+.step.current { color: var(--salus-fg); font-weight: 600; }
+.step.current .num { background: var(--salus-accent); color: var(--salus-accent-fg); border-color: transparent; }
+.step.done .num { background: var(--salus-surface-3); color: var(--salus-fg); }
+.step + .step::before { content: ""; width: 28px; height: 1px; background: var(--salus-border); margin-right: 4px; }
+
+.page { flex: 1; min-height: 0; overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.page h2 { margin: 0; font-size: 16px; }
+.lead { margin: 0; color: var(--salus-fg-muted); max-width: 70ch; }
+.footer { display: flex; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--salus-border); background: var(--salus-surface); align-items: center; }
+.grow { flex: 1; min-width: 0; }
+.right { margin-left: auto; }
+button.primary { background: var(--salus-accent, #3a6df0); color: var(--salus-accent-fg, #fff); border-color: transparent; }
+button.primary:hover:not(:disabled) { filter: brightness(1.1); background: var(--salus-accent, #3a6df0); }
+button.danger { color: var(--salus-danger); }
+button.plus { font-size: 18px; line-height: 1; padding: 2px 10px; }
+
+.toolbar { display: flex; gap: 8px; align-items: center; }
+.faint { color: var(--salus-fg-muted); }
+.error { color: var(--salus-danger); }
+.warn { color: var(--salus-warning); }
+.ok { color: var(--salus-success); }
+.notice { padding: 8px 12px; border: 1px solid var(--salus-border); border-radius: 6px; background: var(--salus-surface-alt); }
+.notice.error { border-color: var(--salus-danger); }
+
+.table-wrap { flex: 1; min-height: 120px; overflow: auto; border: 1px solid var(--salus-border); border-radius: 6px; }
+table { border-collapse: separate; border-spacing: 0; width: 100%; font-size: 12px; }
+th, td { padding: 4px 8px; border-bottom: 1px solid var(--salus-border); text-align: left; white-space: nowrap; }
+th { position: sticky; top: 0; background: var(--salus-surface-2); z-index: 1; }
+td.wrap { white-space: normal; word-break: break-all; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+td.name { max-width: 420px; overflow: hidden; text-overflow: ellipsis; }
+td.name .dir { color: var(--salus-fg-faint); }
+tbody tr:nth-child(even) { background: var(--salus-surface-alt); }
+tbody tr.selected { background: var(--salus-surface-3); }
+tbody tr { cursor: default; }
+.empty { padding: 36px; text-align: center; color: var(--salus-fg-muted); }
+
+.form { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 10px 16px; align-items: center; max-width: 720px; }
+.form > label.field { color: var(--salus-fg); }
+.form .hint { grid-column: 2; margin-top: -6px; font-size: 12px; color: var(--salus-fg-muted); }
+.form input[type=number] { width: 90px; }
+.form input[type=text] { width: 100%; font-family: var(--salus-font-mono); font-size: 12px; }
+.check { display: flex; align-items: center; gap: 8px; }
+.radios { display: flex; flex-direction: column; gap: 10px; max-width: 720px; }
+.radio { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--salus-border); border-radius: 6px; cursor: pointer; }
+.radio.on { border-color: var(--salus-accent); background: var(--salus-surface-alt); }
+.radio .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.radio .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.radio input[type=text] { font-family: var(--salus-font-mono); font-size: 12px; }
+.radio input[type=text].wide { flex: 1; min-width: 240px; }
+
+.bar { height: 14px; border-radius: 7px; background: var(--salus-surface-3); overflow: hidden; }
+.bar > div { height: 100%; background: var(--salus-accent); transition: width .3s; }
+.bar.small { height: 6px; width: 120px; display: inline-block; vertical-align: middle; }
+.bar.done > div { background: var(--salus-success); }
+.big { font-size: 22px; font-variant-numeric: tabular-nums; }
+.cards { display: flex; gap: 12px; flex-wrap: wrap; }
+.card { padding: 10px 14px; border: 1px solid var(--salus-border); border-radius: 6px; min-width: 120px; }
+.card .label { font-size: 11px; color: var(--salus-fg-muted); text-transform: uppercase; letter-spacing: .04em; }
+
+/* Dialog */
+.backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, .45); display: grid; place-items: center; z-index: 10; }
+.dialog.wide { width: min(760px, 94vw); }
+.dialog { background: var(--salus-surface); border: 1px solid var(--salus-border); border-radius: 8px; width: min(680px, 94vw); max-height: 88vh; display: flex; flex-direction: column; box-shadow: 0 10px 40px rgba(0, 0, 0, .4); }
+.dialog > header { padding: 12px 16px; font-weight: 600; border-bottom: 1px solid var(--salus-border); }
+.dialog > .content { padding: 12px 16px; overflow: auto; display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+.dialog > footer { padding: 10px 16px; border-top: 1px solid var(--salus-border); display: flex; gap: 8px; justify-content: flex-end; }
+input.path, .dialog .content > input[type=text] { font-family: var(--salus-font-mono); font-size: 12px; }
+.browser { border: 1px solid var(--salus-border); border-radius: 6px; overflow: auto; height: 280px; }
+.browser .entry { display: flex; gap: 6px; padding: 3px 10px; align-items: center; white-space: nowrap; }
+.browser.tree { height: 360px; }
+.browser .chevron { width: 14px; text-align: center; cursor: pointer; color: var(--salus-fg-muted); user-select: none; }
+.browser .label { cursor: pointer; display: flex; gap: 6px; overflow: hidden; text-overflow: ellipsis; }
+.browser .entry:hover { background: var(--salus-surface-3); }
+.browser .entry.file { color: var(--salus-fg-muted); }
+.browser .entry .size { margin-left: auto; font-size: 11px; color: var(--salus-fg-faint); }
+.browser .entry .icon { width: 16px; text-align: center; }

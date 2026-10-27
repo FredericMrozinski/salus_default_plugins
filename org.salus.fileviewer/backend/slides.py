@@ -13,6 +13,7 @@ import logging
 import re
 import threading
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from errors import ViewerError
@@ -33,6 +34,11 @@ OVERLAP = 1
 JPEG_QUALITY = 80
 CACHE_BYTES = 512 * 1024 * 1024
 PREWARM_MAX_TILES_PER_LEVEL = 64  # overview levels are rendered when a slide is opened
+# Slides without a pyramid (a single full-resolution level) would make OpenSlide read the whole slide into memory
+# for every zoomed-out tile. Those levels are cut from one overview, built once in small blocks.
+MAX_DIRECT_READ = 4096  # px per side that may be read from a slide level for one tile; larger reads use the overview
+OVERVIEW_REDUCTION = 16  # the overview is this much smaller than level 0
+OVERVIEW_BLOCK = 4096  # level-0 pixels per side of the blocks the overview is read in
 SLIDE_SUFFIXES = {".svs", ".tif", ".tiff", ".ndpi", ".scn", ".mrxs", ".vms", ".vmu", ".bif"}
 TILE_NAME = re.compile(r"^(\d+)_(\d+)\.jpeg$")
 
@@ -92,9 +98,49 @@ class Slide:
         self.slide = openslide.OpenSlide(str(path))
         self.id = _slide_id(path)
         self.dz = DeepZoomGenerator(self.slide, tile_size=TILE_SIZE, overlap=OVERLAP, limit_bounds=True)
+        self._overview = None
+        self._overview_lock = threading.Lock()
+
+    def _needs_overview(self, level: int, col: int, row: int) -> bool:
+        """True if OpenSlide would have to read a huge region of the slide for this tile (no usable pyramid level)."""
+        _, _, read_size = self.dz.get_tile_coordinates(level, (col, row))
+        return max(read_size) > MAX_DIRECT_READ
+
+    def overview(self):
+        """The whole slide at 1/OVERVIEW_REDUCTION, on white, read block by block so that memory stays small."""
+        with self._overview_lock:
+            if self._overview is None:
+                width, height = self.slide.dimensions
+                step = OVERVIEW_REDUCTION
+                image = Image.new("RGB", (-(-width // step), -(-height // step)), (255, 255, 255))
+                def read(origin):
+                    x, y = origin
+                    w, h = min(OVERVIEW_BLOCK, width - x), min(OVERVIEW_BLOCK, height - y)
+                    block = self.slide.read_region((x, y), 0, (w, h))
+                    flat = Image.new("RGB", block.size, (255, 255, 255))
+                    flat.paste(block, mask=block.getchannel("A"))
+                    return origin, flat.reduce(step)
+
+                origins = [(x, y) for y in range(0, height, OVERVIEW_BLOCK) for x in range(0, width, OVERVIEW_BLOCK)]
+                with ThreadPoolExecutor(max_workers=4) as pool:  # decoding releases the GIL; 4 blocks of ~64 MB at a time
+                    for (x, y), part in pool.map(read, origins):
+                        image.paste(part, (x // step, y // step))
+                self._overview = image
+                log.info("Built the overview of %s: %dx%d px", self.path.name, *image.size)
+            return self._overview
+
+    def _overview_tile(self, level: int, col: int, row: int):
+        (x, y), _, _ = self.dz.get_tile_coordinates(level, (col, row))
+        size = self.dz.get_tile_dimensions(level, (col, row))
+        reduction = 2 ** (self.dz.level_count - 1 - level)
+        overview = self.overview()
+        box = (x / OVERVIEW_REDUCTION, y / OVERVIEW_REDUCTION,
+               min(overview.width, (x + size[0] * reduction) / OVERVIEW_REDUCTION),
+               min(overview.height, (y + size[1] * reduction) / OVERVIEW_REDUCTION))
+        return overview.resize(size, Image.BILINEAR, box=box, reducing_gap=2.0)
 
     def render(self, level: int, col: int, row: int) -> bytes:
-        tile = self.dz.get_tile(level, (col, row))
+        tile = self._overview_tile(level, col, row) if self._needs_overview(level, col, row) else self.dz.get_tile(level, (col, row))
         if "A" in tile.getbands():
             # Transparent areas outside the scanned region: show them white like a glass slide.
             background = Image.new("RGB", tile.size, (255, 255, 255))

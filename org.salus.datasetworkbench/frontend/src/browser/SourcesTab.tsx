@@ -6,7 +6,6 @@ import { api, encode } from "../shared/salus";
 import type { FileListing, GroupNode, SearchHit, SourceNode, TreeNode } from "../shared/types";
 import { Icon } from "../shared/icons";
 import { MenuItem, useMenu } from "../shared/menu";
-import { openRootDialog } from "../shared/settings";
 import { Empty, ErrorLine, flattenSources, useTree } from "../shared/ui";
 import { copyText, openPath } from "./actions";
 import { Dropped, fromDrop } from "./upload";
@@ -212,8 +211,6 @@ export function SourcesTab() {
             ...newItems("", setDialog, { folder: "New folder", file: "New general source cohort", table: "New tabular source cohort" }),
             "separator",
             { label: "Refresh", icon: <Icon name="refresh" />, onSelect: refresh },
-            "separator",
-            { label: "Workbench folder…", onSelect: openRootDialog },
           ])
         }
       >

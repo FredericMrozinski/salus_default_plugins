@@ -1,0 +1,21 @@
+[description]
+name = "Pharaoh"
+developer = "Salus Organization"
+description = "Repairs and compresses whole slide images: adds missing pyramid levels and re-encodes with a different compression or JPEG quality, for many files at once."
+contact = "frederic.mrozinski@tum.de"
+icon = "icon.svg"
+version = "0.1.0"
+
+[meta]
+api-version = 3
+entry-component = "pharaoh"
+
+[backend]
+entrypoint = "backend/run.sh"
+lifetime = "session"
+
+[[frontend-component]]
+component-name = "pharaoh"
+title = "Pharaoh"
+entrypoint = "frontend/index.html"
+target-panel = "center"

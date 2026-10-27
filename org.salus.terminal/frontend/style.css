@@ -1,0 +1,4 @@
+html, body { height: 100%; overflow: hidden; }
+#terminal { height: 100%; padding: 6px 0 0 8px; box-sizing: border-box; background: var(--salus-bg); }
+/* xterm sizes itself from its container; the scrollbar should not eat a column of the text */
+#terminal .xterm { height: 100%; }

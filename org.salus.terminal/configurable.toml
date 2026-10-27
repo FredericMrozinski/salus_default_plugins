@@ -1,0 +1,24 @@
+# What can be configured in the terminal (see docs/guides/config.md). Never changed at runtime.
+
+[[setting]]
+key = "shell"
+name = "Shell"
+description = "The program that runs in the terminal, started as a login shell. Empty means the SHELL of the user running Salus, else /bin/sh. Applies to terminals opened afterwards."
+type = "file-path"
+default = ""
+
+[[setting]]
+key = "start_directory"
+name = "Start folder"
+description = "The folder a new terminal starts in. Empty means the home folder of the user running Salus. Applies to terminals opened afterwards."
+type = "directory-path"
+default = ""
+
+[[setting]]
+key = "font_size"
+name = "Font size"
+description = "Size of the text in the terminal, in pixels. Applies to terminals opened afterwards."
+type = "int"
+default = 13
+min = 8
+max = 32

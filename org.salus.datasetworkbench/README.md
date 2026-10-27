@@ -25,15 +25,16 @@ frontend/            React + TypeScript + Vite, one page per component, shared c
 
 ## Configuration
 
-The workbench folder (it holds `sources/` and `datasets/`) is stored in the plugin's config directory that Salus provides
-(`settings.json`: `{"root": "/path/to/folder"}`; see the Salus docs, "Configuration files"). It must be on a local disk (SQLite).
+The workbench folder (it holds `sources/` and `datasets/`) is the `root` setting of the plugin, defined in `configurable.toml` and kept by Salus
+(see the Salus docs, "Settings"). It must be on a local disk (SQLite).
 
-- **First start:** nothing is set, so every component shows a setup screen that asks for the folder (suggesting `~/SalusWorkbench`, the old default),
-  tells what would happen (created, an existing workbench is picked up, a problem) and stores the choice.
-- **Later:** right-click the background of the Sources or Datasets tab, **Workbench folder…**, to choose another folder. Nothing is deleted in the old one.
-- **By hand:** the file can be edited; the plugin follows it. If the stored folder cannot be used (unplugged disk), the setup screen says why.
-- Backend routes `GET/PUT /settings` and `POST /settings/check` work without a folder; every other route answers 412 until one is set up.
-- The old environment variable `SALUS_WORKBENCH_ROOT` is no longer read.
+- **First start:** nothing is set, so every component says "Go to Settings → Dataset Workbench and enter the folder". It continues by itself
+  (it checks every few seconds) once the folder is set. The plugin does not suggest or create anything on its own.
+- **Choosing the folder:** in the Salus settings, **Dataset Workbench → Workbench folder**. The folder is created if needed; an existing workbench
+  in it is picked up. Choosing another folder deletes nothing in the old one.
+- If the set folder cannot be used (unplugged disk, a relative path), the same message says why.
+- Backend route `GET /settings` works without a folder; every other route answers 412 until one is set up.
+- The old environment variable `SALUS_WORKBENCH_ROOT` and the old `settings.json` in the plugin's config directory are no longer read.
 
 ## Build and install
 

@@ -77,11 +77,7 @@ button.small:has(.icon) { display: inline-flex; align-items: center; gap: 2px; p
 
 /* Setting up the workbench folder */
 .setup { height: 100%; overflow: auto; display: flex; align-items: flex-start; justify-content: center; padding: var(--salus-space-4); }
-.root-form { display: flex; flex-direction: column; gap: var(--salus-space-3); width: min(560px, 100%); }
-.root-form h2 { margin: 0; font-size: 16px; }
-.root-form p { margin: 0; }
-.root-hint { min-height: 2.6em; font-size: 12px; color: var(--salus-fg-muted); }
-.root-hint .bad { color: var(--salus-danger); }
-.root-hint .good { color: var(--salus-success); }
-.root-config { font-size: 11px; word-break: break-all; }
+.setup-notice { display: flex; flex-direction: column; gap: var(--salus-space-3); width: min(560px, 100%); }
+.setup-notice h2 { margin: 0; font-size: 16px; }
+.setup-notice p { margin: 0; }
 .warn-line { color: var(--salus-warning); font-size: 12px; word-break: break-word; }

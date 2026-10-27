@@ -1,0 +1,24 @@
+[description]
+name = "File Browser"
+developer = "Salus Organization"
+description = "Lists the files and folders of the server. Double-click a file to open it in a viewer."
+contact = "frederic.mrozinski@tum.de"
+version = "0.1.0"
+icon = "icon.svg"
+
+[meta]
+api-version = 3
+entry-component = "main"
+
+[config]
+configurable = "configurable.toml"
+
+[backend]
+entrypoint = "backend/plugin.py"
+lifetime = "session"
+
+[[frontend-component]]
+component-name = "main"
+title = "Files"
+entrypoint = "frontend/index.html"
+target-panel = "left"

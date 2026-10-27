@@ -242,9 +242,9 @@ export type SalusOptions = {
  * @property {typeof fetch} [fetch] for tests
  */
 /**
- * The plugin's own config directory, managed by Salus (`salus.config`). Names are `/`-separated paths
- * relative to the directory; names leaving it throw a `TypeError`. Failures other than a missing file
- * throw `HttpError`. The directory is shared by all users of the plugin; writes are atomic.
+ * The plugin's settings, managed by Salus (`salus.config`). What can be configured is defined in the plugin's
+ * configurable file (`[config]` in the manifest); values are checked against it. A setting that was never set
+ * reads as its default. `update`/`set` reject with `HttpError` (400) for an unknown key or an invalid value.
  */
 export declare class Config {
     #private;
@@ -252,22 +252,15 @@ export declare class Config {
         base?: string;
         fetch?: typeof fetch;
     });
-    /** Content of a file, or `null` if it does not exist. */
-    readBytes(name: string): Promise<Uint8Array | null>;
-    /** Content of a text file, or `null` if it does not exist. */
-    readText(name: string): Promise<string | null>;
-    /** Parsed JSON file; `fallback` (default `null`) if it does not exist. */
-    readJson(name: string, fallback?: unknown): Promise<any>;
-    /** Writes a file (replacing it). Parent directories are created. */
-    writeBytes(name: string, data: string | Uint8Array | ArrayBuffer | Blob | Payload): Promise<void>;
-    writeText(name: string, text: string): Promise<void>;
-    writeJson(name: string, value: unknown): Promise<void>;
-    /** Whether a file or directory exists. */
-    exists(name: string): Promise<boolean>;
-    /** Names in a directory, sorted; directories end with `/`. A directory that does not exist is empty. */
-    list(directory?: string): Promise<string[]>;
-    /** Deletes a file, or a directory with everything in it. Throws `HttpError` (404) if it does not exist. */
-    delete(name: string): Promise<void>;
+    /** All settings that have a value (set, or with a default). */
+    all(): Promise<Record<string, any>>;
+    /** The value of a setting; `fallback` if it has neither a value nor a default. */
+    get(key: string, fallback?: any): Promise<any>;
+    set(key: string, value: string | number | boolean): Promise<void>;
+    /** Sets several settings at once (all or none); `null` resets one to its default. Resolves with all settings. */
+    update(values: Record<string, string | number | boolean | null>): Promise<Record<string, any>>;
+    /** Back to the default. */
+    reset(key: string): Promise<void>;
 }
 /**
  * Connection of this plugin frontend to the framework (and through it, to the backend).
@@ -278,7 +271,7 @@ export declare class Salus {
     frontendId: number | undefined;
     /** HTTP access to the routes the backend opened. */
     http: Http;
-    /** This plugin's config directory (see `Config`). */
+    /** This plugin's settings (see `Config`). */
     config: Config;
     /** Name of this frontend's component (from the manifest), or null if unknown. */
     component: string | null;

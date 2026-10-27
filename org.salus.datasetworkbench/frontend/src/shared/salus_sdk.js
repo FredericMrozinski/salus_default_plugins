@@ -814,20 +814,20 @@ function parentIdFromUrl(win) {
  */
 
 // ---------------------------------------------------------------------------
-// Config directory
+// Config
 // ---------------------------------------------------------------------------
 
 /**
- * The plugin's own config directory, managed by Salus (`salus.config`).
+ * The plugin's settings, managed by Salus (`salus.config`).
  *
- * Every plugin gets one directory (below Salus' config root, next to `salus.toml`) that survives
- * restarts and updates of the plugin. The frontend works on it through this class; the backend reads
- * and writes the same files directly (`plugin.config` in the Python SDK). All names are paths relative
- * to the directory, written with `/` (`"cache/index.json"`); parent directories are created on write.
- * Names that would leave the directory (`..`, absolute paths) throw a `TypeError`.
+ * What can be configured is defined in the plugin's *configurable* file (named under `[config]` in the
+ * manifest): key, type, default, display name and explanation of every setting. The values live in one
+ * config file that Salus keeps for the plugin and that the user can change in the settings. A setting
+ * that was never set reads as its default (or `undefined` if it has none).
  *
- * The directory belongs to the plugin, not to a user: all users of a plugin share it. Writes replace
- * the file atomically. Failures other than a missing file throw `HttpError`.
+ * Values are checked against the configurable: `set` rejects with `HttpError` (status 400, the reason in
+ * `body`) for an unknown key or a value of the wrong type or outside its limits. The settings belong to
+ * the plugin, not to a user: all users of a plugin share them.
  */
 export class Config {
   #base;
@@ -839,122 +839,68 @@ export class Config {
     this.#fetch = fetchFn;
   }
 
-  /** @param {string} name */
-  #url(name, directory = false) {
-    if (typeof name !== "string") throw new TypeError(`config path must be a string: ${String(name)}`);
-    const parts = name === "" ? [] : name.split("/");
-    for (const part of parts) {
-      if (part === "" || part === "." || part === ".." || /[\\\0:]/.test(part)) {
-        throw new TypeError(`invalid config path: ${JSON.stringify(name)}`);
-      }
-    }
-    const path = parts.map(encodeURIComponent).join("/");
-    return path === "" ? this.#base : `${this.#base}/${path}${directory ? "/" : ""}`;
-  }
-
-  async #send(method, url, body) {
+  async #send(method, body) {
     const init = { method, credentials: "same-origin", headers: {} };
-    if (body !== undefined) init.body = body;
-    return this.#fetch(url, init);
-  }
-
-  async #check(response) {
-    if (response.ok) return response;
-    let body;
-    try {
-      body = await response.text();
-    } catch {
-      body = undefined;
+    if (body !== undefined) {
+      init.body = JSON.stringify(body);
+      init.headers["content-type"] = "application/json";
     }
-    throw new HttpError(response, body);
+    const response = await this.#fetch(this.#base, init);
+    if (!response.ok) {
+      let text;
+      try {
+        text = await response.text();
+      } catch {
+        text = undefined;
+      }
+      throw new HttpError(response, text);
+    }
+    return loads(await response.text());
   }
 
   /**
-   * Content of a file, or `null` if it does not exist.
-   * @param {string} name
-   * @returns {Promise<Uint8Array | null>}
+   * All settings that have a value (set, or with a default).
+   * @returns {Promise<Record<string, unknown>>}
    */
-  async readBytes(name) {
-    const response = await this.#send("GET", this.#url(name));
-    if (response.status === 404) return null;
-    return new Uint8Array(await (await this.#check(response)).arrayBuffer());
+  all() {
+    return this.#send("GET");
   }
 
   /**
-   * Content of a text file, or `null` if it does not exist.
-   * @param {string} name
-   * @returns {Promise<string | null>}
-   */
-  async readText(name) {
-    const bytes = await this.readBytes(name);
-    return bytes === null ? null : textDecoder.decode(bytes);
-  }
-
-  /**
-   * Parsed JSON file; `fallback` (default `null`) if it does not exist.
-   * @param {string} name
+   * The value of a setting; `fallback` if it has neither a value nor a default.
+   * @param {string} key
    * @param {unknown} [fallback]
    */
-  async readJson(name, fallback = null) {
-    const text = await this.readText(name);
-    return text === null ? fallback : loads(text);
+  async get(key, fallback = undefined) {
+    const values = await this.all();
+    return Object.hasOwn(values, key) ? values[key] : fallback;
   }
 
   /**
-   * Writes a file (replacing it). Strings are stored as UTF-8.
-   * @param {string} name
-   * @param {string | Uint8Array | ArrayBuffer | Blob | Payload} data
-   */
-  async writeBytes(name, data) {
-    if (name === "") throw new TypeError("a file name is required");
-    await this.#check(await this.#send("PUT", this.#url(name), data instanceof Payload ? data.asBytes() : data));
-  }
-
-  /**
-   * @param {string} name
-   * @param {string} text
-   */
-  writeText(name, text) {
-    return this.writeBytes(name, textEncoder.encode(text));
-  }
-
-  /**
-   * @param {string} name
+   * @param {string} key
    * @param {unknown} value
    */
-  writeJson(name, value) {
-    return this.writeText(name, JSON.stringify(value, null, 2));
+  async set(key, value) {
+    if (value === undefined || value === null) throw new TypeError("use reset(key) to go back to the default");
+    await this.update({ [key]: value });
   }
 
   /**
-   * Whether a file or directory exists.
-   * @param {string} name
+   * Sets several settings at once (all or none). `null` resets a setting to its default.
+   * Resolves with all settings afterwards.
+   * @param {Record<string, unknown>} values
+   * @returns {Promise<Record<string, unknown>>}
    */
-  async exists(name) {
-    if (name === "") return true;
-    const parent = name.includes("/") ? name.slice(0, name.lastIndexOf("/")) : "";
-    const leaf = name.slice(name.lastIndexOf("/") + 1);
-    const names = await this.list(parent);
-    return names.includes(leaf) || names.includes(`${leaf}/`);
+  update(values) {
+    return this.#send("PUT", values);
   }
 
   /**
-   * Names in a directory, sorted; directories end with `/`. A directory that does not exist is empty.
-   * @param {string} [directory]
-   * @returns {Promise<string[]>}
+   * Back to the default.
+   * @param {string} key
    */
-  async list(directory = "") {
-    const response = await this.#check(await this.#send("GET", `${this.#url(directory)}${directory === "" ? "?list" : "/?list"}`));
-    return (await response.json()).map((entry) => (entry.is_dir ? `${entry.name}/` : entry.name));
-  }
-
-  /**
-   * Deletes a file, or a directory with everything in it. Throws `HttpError` (404) if it does not exist.
-   * @param {string} name
-   */
-  async delete(name) {
-    if (name === "") throw new TypeError("cannot delete the config directory itself");
-    await this.#check(await this.#send("DELETE", this.#url(name)));
+  async reset(key) {
+    await this.update({ [key]: null });
   }
 }
 

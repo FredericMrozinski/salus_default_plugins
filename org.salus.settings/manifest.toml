@@ -1,0 +1,22 @@
+[description]
+name = "Settings"
+developer = "Salus Organization"
+description = "Shows the settings of Salus and of every plugin and lets you change them."
+contact = "frederic.mrozinski@tum.de"
+version = "0.1.0"
+icon = "icon.svg"
+
+[meta]
+api-version = 3
+entry-component = "main"
+
+# This plugin has no backend work of its own: it talks to the framework's settings API (see frontend/script.js).
+[backend]
+entrypoint = "backend/plugin.py"
+lifetime = "panel"
+
+[[frontend-component]]
+component-name = "main"
+title = "Settings"
+entrypoint = "frontend/index.html"
+target-panel = "center"

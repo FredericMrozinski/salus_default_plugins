@@ -1,0 +1,25 @@
+[description]
+name = "Terminal"
+developer = "Salus Organization"
+description = "A shell on the server, in a terminal. Everyone who can use this plugin has the rights of the user running Salus."
+contact = "frederic.mrozinski@tum.de"
+version = "0.1.0"
+icon = "icon.svg"
+
+[meta]
+api-version = 3
+entry-component = "main"
+
+[config]
+configurable = "configurable.toml"
+
+# One shell per open terminal; the backend ends with the last terminal.
+[backend]
+entrypoint = "backend/plugin.py"
+lifetime = "panel"
+
+[[frontend-component]]
+component-name = "main"
+title = "Terminal"
+entrypoint = "frontend/index.html"
+target-panel = "bottom"

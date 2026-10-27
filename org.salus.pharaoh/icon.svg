@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 960 960" fill="none" stroke="#5b8def" stroke-width="40" stroke-linecap="round" stroke-linejoin="round">
+  <!-- headdress -->
+  <path d="M480 120C340 120 240 195 205 325L170 790H330L345 610"/>
+  <path d="M480 120C620 120 720 195 755 325L790 790H630L615 610"/>
+  <!-- headband, crown stripes, cobra -->
+  <path d="M345 300H615"/>
+  <path d="M395 150L405 300M565 150L555 300"/>
+  <circle cx="480" cy="215" r="24"/>
+  <!-- lappet stripes -->
+  <path d="M188 450H345M184 550H345M180 650H345"/>
+  <path d="M772 450H615M776 550H615M780 650H615"/>
+  <!-- face -->
+  <path d="M345 300V520C345 620 410 690 480 690C550 690 615 620 615 520V300"/>
+  <!-- beard -->
+  <path d="M450 705V830H510V705M450 765H510"/>
+</svg>

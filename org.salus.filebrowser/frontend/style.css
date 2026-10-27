@@ -1,0 +1,18 @@
+/* The color of an empty Salus panel, so the browser looks like part of the panel in every theme. */
+html, body { height: 100%; background: var(--salus-surface); }
+body { display: flex; flex-direction: column; margin: 0; }
+header { display: flex; gap: var(--salus-space-1); padding: var(--salus-space-2); border-bottom: 1px solid var(--salus-border); }
+header button { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 30px; height: 30px; padding: 0; }
+header button svg { width: 22px; height: 22px; }
+header input { flex: 1; min-width: 0; font-family: var(--salus-font-mono); }
+#message { padding: var(--salus-space-2) var(--salus-space-3); color: var(--salus-danger); }
+#entries { flex: 1; margin: 0; padding: var(--salus-space-1); overflow-y: auto; list-style: none; }
+#entries li { display: flex; align-items: baseline; gap: var(--salus-space-2); padding: 3px var(--salus-space-2);
+              border-radius: var(--salus-radius); cursor: default; user-select: none; }
+#entries li:hover { background: var(--salus-surface-2); }
+#entries li.selected { background: var(--salus-accent); color: var(--salus-accent-fg); }
+.icon { width: 18px; height: 18px; flex-shrink: 0; align-self: center; color: var(--salus-fg-muted); }
+li.selected .icon { color: inherit; }
+.name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.size { color: var(--salus-fg-faint); font-size: 0.85em; flex-shrink: 0; }
+li.selected .size { color: inherit; }

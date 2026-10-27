@@ -7,7 +7,6 @@ import itertools
 import json
 import logging
 import os
-import pathlib
 import struct
 import sys
 import tempfile
@@ -749,127 +748,6 @@ async def _invoke(handler: Callable, arg):
 
 
 # ---------------------------------------------------------------------------
-# Config directory
-# ---------------------------------------------------------------------------
-
-CONFIG_DIR_ENV = "SALUS_CONFIG_DIR"
-
-
-class Config:
-    """The plugin's own config directory, managed by Salus.
-
-    Every plugin gets one directory (below Salus' config directory, next to `salus.toml`) that
-    survives restarts and updates of the plugin. The backend works on it directly; the frontend
-    reaches the same files through `salus.config` in the JavaScript SDK. All names are paths
-    relative to the directory, written with `/` (`"cache/index.json"`); parent directories are
-    created on write. Names that would leave the directory (`..`, absolute paths) raise
-    `ValueError`.
-
-    The directory belongs to the plugin, not to a user: all users of a plugin share it.
-    Writes replace the file atomically, so a reader never sees half a file.
-
-    Get it as `plugin.config`.
-    """
-
-    def __init__(self, directory: str | os.PathLike | None = None):
-        if directory is None:
-            directory = os.environ.get(CONFIG_DIR_ENV)
-            if not directory:
-                raise RuntimeError(f"{CONFIG_DIR_ENV} is not set; the plugin must be started by Salus")
-        self._dir = pathlib.Path(directory)
-        self._dir.mkdir(parents=True, exist_ok=True)
-        self._root = self._dir.resolve()
-
-    @property
-    def path(self) -> pathlib.Path:
-        """The directory itself, for libraries that want a path."""
-        return self._dir
-
-    def path_of(self, name: str) -> pathlib.Path:
-        """The file system path of `name`. Raises `ValueError` if it would leave the directory."""
-        parts = name.split("/") if name else []
-        for part in parts:
-            if part in ("", ".", "..") or any(c in part for c in "\\\0:"):
-                raise ValueError(f"invalid config path: {name!r}")
-        target = self._dir.joinpath(*parts)
-        if not target.resolve().is_relative_to(self._root):
-            raise ValueError(f"config path leaves the config directory: {name!r}")
-        return target
-
-    def exists(self, name: str) -> bool:
-        return self.path_of(name).exists()
-
-    def read_bytes(self, name: str, default=None) -> bytes:
-        """Content of a file. Returns `default` if given and the file does not exist, else raises `FileNotFoundError`."""
-        try:
-            return self.path_of(name).read_bytes()
-        except FileNotFoundError:
-            if default is not None:
-                return default
-            raise
-
-    def read_text(self, name: str, default: str | None = None, encoding: str = "utf-8") -> str:
-        try:
-            return self.path_of(name).read_text(encoding=encoding)
-        except FileNotFoundError:
-            if default is not None:
-                return default
-            raise
-
-    def read_json(self, name: str, default=None):
-        """Parsed JSON file. A missing file gives `default` (`None` unless set)."""
-        try:
-            return json.loads(self.path_of(name).read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            return default
-
-    def write_bytes(self, name: str, data: bytes | bytearray | memoryview | Payload) -> None:
-        if not name:
-            raise ValueError("a file name is required")
-        target = self.path_of(name)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        descriptor, temp = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", suffix=".tmp")
-        try:
-            with os.fdopen(descriptor, "wb") as file:
-                file.write(_to_buffer(data))
-            os.replace(temp, target)
-        except BaseException:
-            try:
-                os.unlink(temp)
-            except FileNotFoundError:
-                pass
-            raise
-
-    def write_text(self, name: str, text: str, encoding: str = "utf-8") -> None:
-        self.write_bytes(name, text.encode(encoding))
-
-    def write_json(self, name: str, value, indent: int | None = 2) -> None:
-        self.write_text(name, json.dumps(value, indent=indent, ensure_ascii=False))
-
-    def list(self, directory: str = "") -> list[str]:
-        """Names in a directory, sorted; directories end with `/`. A directory that does not exist is empty."""
-        target = self.path_of(directory)
-        if not target.is_dir():
-            return []
-        return sorted(
-            entry.name + ("/" if entry.is_dir() else "")
-            for entry in target.iterdir()
-            if not (entry.name.startswith(".") and entry.name.endswith(".tmp"))
-        )
-
-    def delete(self, name: str) -> None:
-        """Deletes a file, or a directory with everything in it. Raises `FileNotFoundError` if missing."""
-        if not name:
-            raise ValueError("cannot delete the config directory itself")
-        target = self.path_of(name)
-        if target.is_dir() and not target.is_symlink():
-            import shutil
-            shutil.rmtree(target)
-        else:
-            target.unlink()
-
-
-# ---------------------------------------------------------------------------
 # Plugin
 # ---------------------------------------------------------------------------
 
@@ -962,6 +840,54 @@ class Route:
         await self._plugin._close_route(self)
 
 
+class Config:
+    """The plugin's settings, managed by Salus. Get it as `plugin.config`.
+
+    What can be configured is defined in the plugin's *configurable* file (named under `[config]` in the
+    manifest): the key, type, default, display name and explanation of every setting. The values live in one
+    config file that Salus keeps for the plugin and that the user can change in the settings. A setting that
+    was never set reads as its default (or `None` if it has none).
+
+    All methods are coroutines, because Salus owns the file. Values are checked against the configurable:
+    `set` raises `SalusError` for an unknown key or a value of the wrong type or outside its limits. The
+    settings belong to the plugin, not to a user: all users of a plugin share them.
+    """
+
+    def __init__(self, plugin: "Plugin"):
+        self._plugin = plugin
+
+    async def all(self) -> dict:
+        """All settings that have a value (set, or with a default)."""
+        response = await self._plugin.request("config/get")
+        return dict(response.meta["data"]["values"])
+
+    def all_blocking(self) -> dict:
+        """Like `all()`, for plain `def` handlers running in worker threads."""
+        return self._plugin._run_blocking(self.all(), "all_blocking()")
+
+    def get_blocking(self, key: str, default=None):
+        """Like `get()`, for plain `def` handlers running in worker threads."""
+        return self.all_blocking().get(key, default)
+
+    async def get(self, key: str, default=None):
+        """The value of a setting. `default` is returned when the setting has neither a value nor a default."""
+        return (await self.all()).get(key, default)
+
+    async def set(self, key: str, value) -> None:
+        """Sets a setting."""
+        await self.update({key: value})
+
+    async def update(self, values: dict) -> dict:
+        """Sets several settings at once (all or none). `None` resets a setting to its default.
+        Returns all settings afterwards."""
+        response = await self._plugin.request("config/set", {"values": dict(values)})
+        return dict(response.meta["data"]["values"])
+
+    async def reset(self, key: str) -> None:
+        """Back to the default."""
+        await self.update({key: None})
+
+
 class Plugin:
     def __init__(self, socket_path: str | None = None):
         _setup_logging()
@@ -987,13 +913,11 @@ class Plugin:
         self._detached_handlers: list[Callable] = []
         self._unclaimed: asyncio.Queue = asyncio.Queue()
         self._unclaimed_consumer = False
-        self._config: Config | None = None
+        self._config = Config(self)
 
     @property
     def config(self) -> Config:
-        """The plugin's config directory (see `Config`). Created on first use."""
-        if self._config is None:
-            self._config = Config()
+        """The plugin's settings (see `Config`)."""
         return self._config
 
     # -- channels ----------------------------------------------------------
@@ -1044,6 +968,20 @@ class Plugin:
         connection = self._require_connection()
         asyncio.run_coroutine_threadsafe(
             connection.send_message(target, wire_channel, data), self._loop).result()
+
+    def _run_blocking(self, coroutine, name: str):
+        """Runs a coroutine on the plugin's event loop and waits for it (for worker threads)."""
+        if self._loop is None:
+            coroutine.close()
+            raise RuntimeError(f"{name} needs the running plugin: call it from a handler or from the main coroutine of run(), not while the module loads")
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if running is not None:
+            coroutine.close()
+            raise RuntimeError(f"{name} would deadlock the event loop; use the `await` version instead")
+        return asyncio.run_coroutine_threadsafe(coroutine, self._loop).result()
 
     async def send_message(self, frontend_id: int, channel: str, data: Sendable) -> None:
         """Low level: send on any logical channel, with an explicit frontend id."""
