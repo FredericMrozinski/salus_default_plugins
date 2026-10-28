@@ -51,7 +51,7 @@ slides = Slides()
 @app.route("GET", "/slide/info")
 async def slide_info(req):
     try:
-        slide = await asyncio.to_thread(slides.open, file_arg(req))
+        slide = await asyncio.to_thread(slides.open, file_arg(req), req.frontend_id)
     except ViewerError as e:
         raise fail(e) from None
     asyncio.ensure_future(slides.prewarm(slide))
@@ -284,6 +284,7 @@ def edit_close(req):
 
 @app.on_frontend_detached
 def viewer_closed(frontend_id):
+    slides.release(frontend_id)  # a slide is closed once the last viewer that opened it is gone
     edits.close_owned(frontend_id)  # the working copies of a closed viewer go away; unsaved edits are lost
 
 
