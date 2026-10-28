@@ -541,12 +541,14 @@ function renderProgress() {
     current.textContent = running ? (active ? `Working on ${active.rel} (${Math.round(active.percent)} %)${eta}` : "Starting…") : `Took ${formatDuration(elapsed)}`;
     const before = items.filter((i) => i.status === "done").reduce((s, i) => s + i.size, 0);
     const after = items.filter((i) => i.status === "done").reduce((s, i) => s + (i.out_size ?? 0), 0);
-    cards.replaceChildren(
+    // replaceChildren turns null (and 0) into the text "null" ("0"), so only real cards are passed.
+    cards.replaceChildren(...[
       card("Written", counts.done), counts.skipped ? card("Skipped", counts.skipped) : null,
       counts.failed ? card("Failed", counts.failed, "error") : null, counts.aborted ? card("Not done", counts.aborted) : null,
       counts.done ? card("Size", `${formatBytes(before)} → ${formatBytes(after)}`) : null,
       counts.done && before ? card("Saved", `${Math.round((1 - after / before) * 100)} %`) : null,
-      card("Elapsed", formatDuration(elapsed)));
+      card("Elapsed", formatDuration(elapsed)),
+    ].filter(Boolean));
     stop.hidden = !running;
     again.hidden = newRun.hidden = running;
     tbody.replaceChildren(...items.map((i) => {
