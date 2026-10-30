@@ -1,0 +1,46 @@
+[description]
+name = "Segmentation"
+developer = "Salus Organization"
+description = "Annotate whole slide images with polygons in annotation projects; annotations are saved as GeoJSON next to the project, the images stay where they are."
+contact = "frederic.mrozinski@tum.de"
+icon = "icon.svg"
+version = "0.1.0"
+
+[meta]
+api-version = 3
+entry-component = "browser"
+
+# One backend per user: the four components share the open project, the image, the class and the tool through it.
+[backend]
+entrypoint = "backend/run.sh"
+lifetime = "session"
+
+[[frontend-component]]
+component-name = "browser"
+title = "Images"
+entrypoint = "frontend/browser/index.html"
+target-panel = "left"
+
+[[frontend-component]]
+component-name = "viewer"
+title = "Annotation"
+entrypoint = "frontend/viewer/index.html"
+target-panel = "center"
+
+[[frontend-component]]
+component-name = "tools"
+title = "Tools"
+entrypoint = "frontend/tools/index.html"
+target-panel = "bottom"
+
+[[frontend-component]]
+component-name = "classes"
+title = "Classes"
+entrypoint = "frontend/classes/index.html"
+target-panel = "right"
+
+[[frontend-component]]
+component-name = "export"
+title = "Export"
+entrypoint = "frontend/export/index.html"
+target-panel = "center"

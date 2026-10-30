@@ -1,0 +1,6 @@
+openslide-python
+openslide-bin
+pillow
+shapely
+pyvips[binary]
+torch
