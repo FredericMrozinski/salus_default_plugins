@@ -152,12 +152,19 @@ class Project:
 
     # -- images
     def images(self, rescan: bool = False) -> list[str]:
-        """Paths of the images below the root (relative, with /), sorted."""
+        """Paths of the images below the root, in all subfolders (relative, with /), sorted. Linked folders are
+        followed, each real folder once (so link cycles end)."""
         with self.lock:
             if self._images is None or rescan:
                 found = []
                 extensions = tuple(self.data["extensions"])
-                for directory, subdirs, files in os.walk(self.root, onerror=lambda e: None):
+                seen = set()
+                for directory, subdirs, files in os.walk(self.root, onerror=lambda e: None, followlinks=True):
+                    real = os.path.realpath(directory)
+                    if real in seen:
+                        subdirs[:] = []
+                        continue
+                    seen.add(real)
                     subdirs[:] = sorted(d for d in subdirs if not d.startswith("."))
                     rel_dir = Path(directory).relative_to(self.root)
                     for name in files:

@@ -33,6 +33,15 @@ class ProjectTest(Base):
         self.project.data["extensions"] = [".svs", ".tif"]
         self.assertEqual(self.project.images(rescan=True), ["a.svs", "sub/b.SVS", "sub/c.tif"])
 
+    def test_linked_folders_are_followed_once(self):
+        (self.dir / "elsewhere/deep").mkdir(parents=True)
+        (self.dir / "elsewhere/deep/d.svs").write_bytes(b"x")
+        (self.dir / "images/linked").symlink_to(self.dir / "elsewhere")
+        (self.dir / "elsewhere/loop").symlink_to(self.dir / "images")  # a cycle back to the root
+        images = self.project.images(rescan=True)
+        self.assertEqual(images, ["a.svs", "linked/deep/d.svs", "sub/b.SVS"])
+        self.assertTrue(self.project.image_path("linked/deep/d.svs").is_file())
+
     def test_project_reopens_from_its_save_folder(self):
         again = Project.open(self.dir / "save")
         self.assertEqual(again.id, self.project.id)
