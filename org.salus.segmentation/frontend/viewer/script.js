@@ -15,7 +15,7 @@ let overlay = null; // the canvas on top of the image
 let offset = [0, 0]; // level-0 position of the image's top-left tile (OpenSlide bounds); annotations use level-0 coordinates
 let shapes = []; // [{id, class_id, polygons: [[ring, ...], ...], bbox: [x0, y0, x1, y1]}]
 let draft = null; // polygon being drawn: {points: [[x, y], ...]} in image pixels
-let stroke = null; // eraser stroke being drawn: {points, radius} in image pixels
+let stroke = null; // brush or eraser stroke being drawn: {points, radius, mode: "paint" | "erase"} in image pixels
 // Smart brush stroke: the backend segments each dab; `dabs` are its masks for the preview, placed in image pixels.
 // {id, mode: "paint" | "erase", dabs: [{x, y, w, h, bitmap}], pending: [x, y] | null, busy, ended, polygon?}
 // A smart polygon is a stroke too, with the drawn `polygon` (image pixels), whose dabs the backend places itself.
@@ -24,6 +24,7 @@ let preview = null; // offscreen canvas the smart brush preview is tinted in
 let press = null; // the mouse button is down: {x, y, moved, startedEmpty}
 let pointer = null; // last mouse position on the canvas (screen pixels), or null outside
 let space = false; // Space is held: pan whatever the tool
+let ctrl = false; // Ctrl is held: the same
 let hint = "";
 let openToken = 0;
 let loadToken = 0;
@@ -31,16 +32,30 @@ let loadToken = 0;
 const CLOSE_DISTANCE = 10; // screen pixels: a click this close to the first point closes the polygon
 const DRAG_THRESHOLD = 4; // screen pixels the mouse must move before a press counts as freehand drawing
 const SAMPLE_DISTANCE = 3; // screen pixels between freehand points
-const SMART_INNER = 16; // screen pixels; the smart brush's inner radius, as in backend/smartbrush.py (INNER)
 const isPolygonTool = (tool) => tool === "polygon" || tool === "smartpolygon"; // both draw a polygon
 const isSmartBrush = (tool) => tool === "smart" || tool === "smarteraser"; // both paint dabs while dragging
+const isRoundBrush = (tool) => tool === "brush" || tool === "eraser" || isSmartBrush(tool); // the cursor is a circle
+const panning = () => space || ctrl;
+
+/** Whether a smart mode is chosen (any but "exact"); "color", color similarity, is the only one so far. */
+const isSmartMode = () => !!state?.mode && state.mode !== "exact";
+
+/** The tool in effect: a smart mode turns brush, eraser and polygon into "smart", "smarteraser" and "smartpolygon". */
+function mode() {
+  const tool = state?.tool;
+  if (!isSmartMode() || !tool || tool === "pan") return tool;
+  return { brush: "smart", eraser: "smarteraser", polygon: "smartpolygon" }[tool];
+}
+
+/** The width setting (screen pixels) is the brush and eraser diameter, and twice the smart tools' inner radius. */
+const radius = () => (state?.brush ?? 32) / 2;
 
 followState((next) => {
   const previous = state;
   state = next;
   if (!next.project) return closeImage("Open a project and choose an image in the image browser.");
   if (next.image !== image) return void openImage(next.image);
-  if (previous && previous.tool !== next.tool) cancel(false); // a finished smart stroke still being saved is kept
+  if (previous && (previous.tool !== next.tool || previous.mode !== next.mode)) cancel(false); // a finished smart stroke still being saved is kept
   if (previous && previous.class_id !== next.class_id && draft) hint = "";
   updateCursor();
   redraw();
@@ -48,7 +63,54 @@ followState((next) => {
 
 onEvent((event) => {
   if (event.type === "annotations" && event.image === image) loadAnnotations();
+  if (event.type === "focus" && event.image === image) {
+    if (event.bbox) focusOn(event.bbox, event.id);
+    else if (focused) (focused = null), redraw(); // unpicked (here or elsewhere)
+  }
 });
+
+/** Whether a point (level-0 pixels) is inside a shape (even-odd over all its rings, so holes are outside). */
+function contains(shape, x, y) {
+  const [x0, y0, x1, y1] = shape.bbox;
+  if (x < x0 || x > x1 || y < y0 || y > y1) return false;
+  let inside = false;
+  for (const polygon of shape.polygons) for (const ring of polygon) {
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const [xi, yi] = ring[i], [xj, yj] = ring[j];
+      if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+    }
+  }
+  return inside;
+}
+
+/** A click (not a drag) while panning: outside the picked shape, it is unpicked, here and in the class editor. */
+function clickWhilePanning(event) {
+  if (!focused || !event.quick || drawing()) return;
+  const shape = shapes.find((s) => s.id === focused);
+  const [x, y] = toImage(event.position.x, event.position.y);
+  if (shape && contains(shape, x, y)) return;
+  focused = null;
+  redraw();
+  api("POST", "/focus", { json: { image, id: null } }).catch(() => undefined);
+}
+
+// --------------------------------------------------------------------------- showing a shape picked in the class editor
+
+let focused = null; // id of the shape outlined after it was picked; the next press in the viewer ends it
+
+/** Moves and zooms so that the region (level-0 pixels) sits in the middle of the view with a margin around it. */
+function focusOn(bbox, id) {
+  if (!viewer) return;
+  if (viewer.world.getItemCount() === 0) return void viewer.addOnceHandler("open", () => focusOn(bbox, id)); // still loading
+  const [x0, y0, x1, y1] = bbox;
+  const w = Math.max(x1 - x0, 1), h = Math.max(y1 - y0, 1);
+  const margin = 0.35; // of the region's size, on every side
+  const rect = viewer.viewport.imageToViewportRectangle(
+    x0 - offset[0] - w * margin, y0 - offset[1] - h * margin, w * (1 + 2 * margin), h * (1 + 2 * margin));
+  viewer.viewport.fitBounds(rect);
+  focused = id ?? null;
+  redraw();
+}
 
 // --------------------------------------------------------------------------- opening an image
 
@@ -56,6 +118,7 @@ function closeImage(text) {
   openToken++;
   image = null;
   shapes = [];
+  focused = null;
   draft = stroke = null;
   cancelSmart();
   viewer?.destroy();
@@ -96,8 +159,9 @@ async function openImage(path) {
   viewer.addHandler("animation", renderStatus);
   viewer.addHandler("open", renderStatus);
   // While drawing, the left button draws instead of panning; the mouse wheel still zooms.
-  const block = (event) => { if (drawing()) event.preventDefaultAction = true; };
+  const block = (event) => { if (drawing() && !event.originalEvent?.ctrlKey) event.preventDefaultAction = true; };
   for (const name of ["canvas-drag", "canvas-drag-end", "canvas-click", "canvas-double-click"]) viewer.addHandler(name, block);
+  viewer.addHandler("canvas-click", clickWhilePanning);
   updateCursor();
   await loadAnnotations();
 }
@@ -174,11 +238,13 @@ function draw() {
   const colors = new Map((state?.project?.classes ?? []).map((c) => [c.id, c.color]));
   const opacity = state?.opacity ?? 0.35;
   const [vx0, vy0] = toImage(0, 0, t), [vx1, vy1] = toImage(width, height, t);
+  const hidden = new Set(state?.hidden ?? []); // classes hidden in the class editor
 
   // The shapes, in image coordinates.
   ctx.setTransform(dpr * t.s, 0, 0, dpr * t.s, dpr * t.ox, dpr * t.oy);
   ctx.lineJoin = "round";
   for (const shape of shapes) {
+    if (hidden.has(shape.class_id)) continue;
     const [x0, y0, x1, y1] = shape.bbox;
     if (x1 < vx0 || x0 > vx1 || y1 < vy0 || y0 > vy1) continue;
     const color = colors.get(shape.class_id) ?? "#888888";
@@ -193,25 +259,37 @@ function draw() {
       ctx.fill("evenodd");
       ctx.globalAlpha = 1;
     }
+    if (shape.id === focused) { // picked in the class editor: a dark and a white outline, readable on any tissue
+      ctx.lineWidth = 5 / t.s;
+      ctx.strokeStyle = "rgba(0, 0, 0, 0.55)";
+      ctx.stroke();
+      ctx.lineWidth = 2.5 / t.s;
+      ctx.strokeStyle = "#ffffff";
+      ctx.stroke();
+      continue;
+    }
     ctx.lineWidth = 1.5 / t.s;
     ctx.strokeStyle = color;
     ctx.stroke();
   }
 
-  // The eraser stroke: what will be cut away.
+  // The brush or eraser stroke: what will be painted (in the class color) or cut away (white).
+  const classColor = colors.get(state?.class_id) ?? "#ffffff";
   if (stroke && stroke.points.length) {
     ctx.beginPath();
     stroke.points.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
     if (stroke.points.length === 1) ctx.lineTo(stroke.points[0][0] + 0.01, stroke.points[0][1]);
     ctx.lineCap = "round";
+    ctx.lineJoin = "round";
     ctx.lineWidth = stroke.radius * 2;
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.35)";
+    ctx.globalAlpha = stroke.mode === "erase" ? 0.35 : Math.max(opacity, 0.35);
+    ctx.strokeStyle = stroke.mode === "erase" ? "#ffffff" : classColor;
     ctx.stroke();
+    ctx.globalAlpha = 1;
   }
 
   // The smart brush stroke: its dab masks drawn opaque in an offscreen canvas, tinted, then blended in once,
   // so overlapping dabs do not add up.
-  const classColor = colors.get(state?.class_id) ?? "#ffffff";
   if (smart && (smart.dabs.length || smart.polygon)) {
     preview ??= document.createElement("canvas");
     preview.width = overlay.width;
@@ -263,21 +341,12 @@ function draw() {
       ctx.stroke();
     }
   }
-  if (state?.tool === "eraser" && pointer && !space) {
+  const tool = mode();
+  if (isRoundBrush(tool) && pointer && !panning()) {
+    // The brush (for the smart tools: the inner circle, where the seeds are). Blue while erasing.
+    const erasing = stroke ? stroke.mode === "erase" : smart && !smart.polygon ? smart.mode === "erase" : tool === "eraser" || tool === "smarteraser" || shift;
     ctx.beginPath();
-    ctx.arc(pointer.x, pointer.y, state.brush / 2, 0, Math.PI * 2);
-    ctx.lineWidth = 1.5;
-    ctx.strokeStyle = "rgba(0, 0, 0, 0.7)";
-    ctx.stroke();
-    ctx.lineWidth = 1;
-    ctx.strokeStyle = "#ffffff";
-    ctx.stroke();
-  }
-  if (isSmartBrush(state?.tool) && pointer && !space) {
-    // The inner circle, where the seeds are. Blue while erasing.
-    const erasing = smart && !smart.polygon ? smart.mode === "erase" : state.tool === "smarteraser" || shift;
-    ctx.beginPath();
-    ctx.arc(pointer.x, pointer.y, SMART_INNER, 0, Math.PI * 2);
+    ctx.arc(pointer.x, pointer.y, radius(), 0, Math.PI * 2);
     ctx.lineWidth = 2.5;
     ctx.strokeStyle = "rgba(0, 0, 0, 0.6)";
     ctx.stroke();
@@ -303,14 +372,14 @@ function renderStatus() {
 
 function updateCursor() {
   if (!viewer) return;
-  const tool = state?.tool;
-  viewer.canvas.style.cursor = space || tool === "pan" ? "grab" : tool === "eraser" || isSmartBrush(tool) ? "none" : "crosshair";
+  const tool = mode();
+  viewer.canvas.style.cursor = panning() || tool === "pan" ? "grab" : isRoundBrush(tool) ? "none" : "crosshair";
 }
 
 // --------------------------------------------------------------------------- input
 
-let shift = false; // Shift is held: the smart brush erases
-const drawing = () => !!(viewer && image && !space && ["polygon", "eraser", "smart", "smarteraser", "smartpolygon"].includes(state?.tool));
+let shift = false; // Shift is held: the brushes erase
+const drawing = () => !!(viewer && image && !panning() && state?.tool && state.tool !== "pan");
 const inCanvas = (event) => viewer && viewer.canvas.contains(event.target);
 
 function setHint(text) {
@@ -318,24 +387,42 @@ function setHint(text) {
   renderStatus();
 }
 
+/** The tool a press uses: the left button the chosen one; the right button the eraser, or the brush when the eraser
+ *  is chosen (smart or not, following the mode). Null: the press does nothing (right button with Pan). */
+function pressTool(button) {
+  if (button === 0) return mode();
+  if (button !== 2 || state.tool === "pan") return null;
+  const tool = state.tool === "eraser" ? "brush" : "eraser";
+  return isSmartMode() ? { brush: "smart", eraser: "smarteraser" }[tool] : tool;
+}
+
 container.addEventListener("pointerdown", (event) => {
-  if (event.button !== 0 || !drawing() || !inCanvas(event)) return;
+  if (press || event.ctrlKey || !drawing() || !inCanvas(event)) return; // Ctrl+drag pans (OpenSeadragon)
+  const tool = pressTool(event.button);
+  if (!tool) return;
+  if (focused) { // drawing ends the outline of a picked shape (panning keeps it)
+    focused = null;
+    redraw();
+    api("POST", "/focus", { json: { image, id: null } }).catch(() => undefined);
+  }
   const p = local(event);
   pointer = p;
-  if (isPolygonTool(state.tool)) {
+  // The brushes paint, or erase with Shift (left button only); the erasers always erase.
+  const paintMode = tool === "eraser" || tool === "smarteraser" || (event.shiftKey && event.button === 0) ? "erase" : "paint";
+  if (isPolygonTool(tool)) {
     if (state.class_id == null) return setHint("Choose a class in the class editor first.");
-    press = { ...p, moved: false, startedEmpty: !draft };
-  } else if (isSmartBrush(state.tool)) {
-    const mode = state.tool === "smarteraser" || event.shiftKey ? "erase" : "paint";
-    if (mode === "paint" && state.class_id == null) return setHint("Choose a class in the class editor first.");
+    press = { ...p, tool, moved: false, startedEmpty: !draft };
+  } else if (paintMode === "paint" && state.class_id == null) {
+    return setHint("Choose a class in the class editor first.");
+  } else if (isSmartBrush(tool)) {
     if (smart) return setHint(smart.polygon ? "Wait until the smart polygon is done." : ""); // the previous stroke is still being saved
-    press = { ...p, moved: true };
-    smart = { id: crypto.randomUUID(), mode, dabs: [], pending: toImage(p.x, p.y), busy: false, ended: false, scale: transform().s };
+    press = { ...p, tool, moved: true };
+    smart = { id: crypto.randomUUID(), mode: paintMode, dabs: [], pending: toImage(p.x, p.y), busy: false, ended: false, scale: transform().s, inner: radius() };
     pumpSmart();
   } else {
-    press = { ...p, moved: true };
+    press = { ...p, tool, moved: true };
     const t = transform();
-    stroke = { points: [toImage(p.x, p.y, t)], radius: state.brush / 2 / t.s };
+    stroke = { points: [toImage(p.x, p.y, t)], radius: radius() / t.s, mode: paintMode };
   }
   setHint("");
   redraw();
@@ -346,14 +433,14 @@ container.addEventListener("pointermove", (event) => {
   pointer = inCanvas(event) || press ? p : null;
   if (press && drawing()) {
     const t = transform();
-    if (isPolygonTool(state.tool)) {
+    if (isPolygonTool(press.tool)) {
       if (!press.moved && Math.hypot(p.x - press.x, p.y - press.y) > DRAG_THRESHOLD) {
         press.moved = true;
         draft ??= { points: [] };
         if (press.startedEmpty) draft.points.push(toImage(press.x, press.y, t));
       }
       if (press.moved) addPoint(draft.points, p, t);
-    } else if (isSmartBrush(state.tool)) {
+    } else if (isSmartBrush(press.tool)) {
       if (smart && !smart.ended) {
         smart.pending = toImage(p.x, p.y, t);
         pumpSmart();
@@ -380,7 +467,7 @@ window.addEventListener("pointerup", (event) => {
   const wasPress = press;
   press = null;
   if (!viewer) return;
-  if (isPolygonTool(state.tool)) {
+  if (isPolygonTool(wasPress.tool)) {
     if (wasPress.moved) {
       if (wasPress.startedEmpty) finishPolygon(); // a freehand shape: releasing closes it
     } else if (nearFirst()) {
@@ -389,25 +476,45 @@ window.addEventListener("pointerup", (event) => {
       draft ??= { points: [] };
       draft.points.push(toImage(p.x, p.y));
     }
-  } else if (isSmartBrush(state.tool)) {
+  } else if (isSmartBrush(wasPress.tool)) {
     if (smart && !smart.ended) {
       smart.ended = true;
       pumpSmart();
     }
   } else if (stroke) {
-    erase();
+    finishStroke();
   }
   redraw();
 }, true);
 
 container.addEventListener("dblclick", (event) => {
-  if (isPolygonTool(state?.tool) && draft && inCanvas(event)) finishPolygon();
+  if (isPolygonTool(mode()) && draft && inCanvas(event)) finishPolygon();
 }, true);
 
 container.addEventListener("pointerleave", () => {
   if (!press) pointer = null;
   redraw();
 });
+
+// Keys go to the panel that was clicked last, so Space (pan) and the tool keys would not reach the viewer after a click
+// in the tools or class panel until the image is clicked. The viewer takes the keyboard when the mouse comes onto it
+// (not while a button is held, so a drag from elsewhere is left alone).
+container.addEventListener("pointerenter", (event) => {
+  if (event.buttons || document.hasFocus() || !viewer) return;
+  window.focus();
+  viewer.canvas.focus({ preventScroll: true });
+});
+
+// Ctrl+click is a right click on macOS: no context menu, so Ctrl+drag can pan.
+container.addEventListener("contextmenu", (event) => event.preventDefault());
+
+function setPanKey(which, down) {
+  if (which === "space" ? space === down : ctrl === down) return;
+  if (which === "space") space = down;
+  else ctrl = down;
+  updateCursor();
+  redraw();
+}
 
 window.addEventListener("keydown", (event) => {
   if (event.target.closest?.("input, textarea, select")) return;
@@ -416,10 +523,10 @@ window.addEventListener("keydown", (event) => {
     shift = true;
     redraw();
   }
-  if (event.key === " " && !space) {
-    space = true;
-    updateCursor();
-    redraw();
+  if (event.key === "Control") {
+    setPanKey("ctrl", true);
+  } else if (event.key === " ") {
+    setPanKey("space", true);
     event.preventDefault();
   } else if (event.key === "Escape") {
     cancel();
@@ -437,7 +544,8 @@ window.addEventListener("keydown", (event) => {
     history("redo");
     event.preventDefault();
   } else if (!mod && !event.altKey) {
-    const tool = { v: "pan", p: "polygon", e: "eraser", b: "smart", x: "smarteraser", s: "smartpolygon" }[event.key.toLowerCase()];
+    const key = event.key.toLowerCase();
+    const tool = { v: "pan", b: "brush", e: "eraser", p: "polygon" }[key];
     if (tool && state?.project) setState({ tool }).catch(() => undefined);
   }
 });
@@ -447,11 +555,15 @@ window.addEventListener("keyup", (event) => {
     shift = false;
     redraw();
   }
-  if (event.key === " ") {
-    space = false;
-    updateCursor();
-    redraw();
-  }
+  if (event.key === "Control") setPanKey("ctrl", false);
+  if (event.key === " ") setPanKey("space", false);
+});
+
+// Keys released while another window had the focus never send keyup.
+window.addEventListener("blur", () => {
+  shift = false;
+  setPanKey("ctrl", false);
+  setPanKey("space", false);
 });
 
 /** Drops what is being drawn. `all`: also a smart stroke that has ended and is being finished (Esc). */
@@ -474,11 +586,12 @@ async function finishPolygon() {
     const last = points[points.length - 1];
     if (!last || Math.hypot((p[0] - last[0]) * t.s, (p[1] - last[1]) * t.s) >= 1) points.push(p);
   }
-  if (state.tool === "smartpolygon" && smart && points.length >= 3) return setHint("Wait until the smart polygon is done.");
+  const isSmart = mode() === "smartpolygon";
+  if (isSmart && smart && points.length >= 3) return setHint("Wait until the smart polygon is done.");
   draft = null;
   redraw();
   if (points.length < 3) return setHint("A polygon needs at least three points.");
-  if (state.tool === "smartpolygon") return smartPolygon(points, t.s);
+  if (isSmart) return smartPolygon(points, t.s, radius());
   try {
     // Freehand shapes have many points; drop those that change the outline by less than half a screen pixel.
     await api("POST", "/annotations/polygon", { json: { image, class_id: state.class_id, points, simplify: 0.5 / t.s } });
@@ -488,10 +601,12 @@ async function finishPolygon() {
   }
 }
 
-async function erase() {
+async function finishStroke() {
   const current = stroke;
   try {
-    const result = await api("POST", "/annotations/erase", { json: { image, points: current.points, radius: current.radius } });
+    const result = current.mode === "erase"
+      ? await api("POST", "/annotations/erase", { json: { image, points: current.points, radius: current.radius } })
+      : await api("POST", "/annotations/paint", { json: { image, points: current.points, radius: current.radius, class_id: state.class_id } });
     if (result.changed) await loadAnnotations();
   } catch (error) {
     setHint(errorText(error));
@@ -511,7 +626,7 @@ async function pumpSmart() {
     current.pending = null;
     current.busy = true;
     try {
-      const result = await api("POST", "/smartbrush/dab", { json: { image, stroke: current.id, x, y, scale: current.scale, mode: current.mode } });
+      const result = await api("POST", "/smartbrush/dab", { json: { image, stroke: current.id, x, y, scale: current.scale, mode: current.mode, inner: current.inner } });
       const dabs = await Promise.all(result.dabs.map(async (d) => ({ ...d, bitmap: await bitmapOf(d.png) })));
       if (smart !== current) return;
       current.dabs.push(...dabs);
@@ -532,12 +647,12 @@ async function pumpSmart() {
 
 // A smart polygon: the backend places the dabs along the outline and returns them in batches of about a second;
 // the viewer asks until none remain, showing each batch, then commits the polygon with its dabs.
-async function smartPolygon(points, scale) {
-  const current = smart = { id: crypto.randomUUID(), mode: "paint", dabs: [], pending: null, busy: true, ended: true, scale, polygon: points };
+async function smartPolygon(points, scale, inner) {
+  const current = smart = { id: crypto.randomUUID(), mode: "paint", dabs: [], pending: null, busy: true, ended: true, scale, inner, polygon: points };
   setHint("Smart polygon: following the outline…");
   redraw();
   try {
-    let json = { image, stroke: current.id, points, scale };
+    let json = { image, stroke: current.id, points, scale, inner };
     for (;;) {
       const result = await api("POST", "/smartbrush/outline", { json });
       const dabs = await Promise.all(result.dabs.map(async (d) => ({ ...d, bitmap: await bitmapOf(d.png) })));

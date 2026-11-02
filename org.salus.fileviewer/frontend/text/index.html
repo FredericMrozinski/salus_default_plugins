@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Text Viewer</title>
+  <!-- highlight.js colors: the light or the dark theme is switched on to match Salus' theme (see script.js) -->
+  <link rel="stylesheet" href="../vendor/highlight-github.min.css" id="light-theme">
+  <link rel="stylesheet" href="../vendor/highlight-github-dark.min.css" id="dark-theme" disabled>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="bar">
+    <strong id="file" class="grow"></strong>
+    <span id="info" class="faint"></span>
+    <label title="The language the text is colored as">
+      <span class="faint">Language</span>
+      <select id="language"></select>
+    </label>
+    <label id="formatToggle" class="check" hidden title="Show the JSON indented, one value per line (the file is not changed)">
+      <input id="format" type="checkbox"> Format
+    </label>
+    <label class="check" title="Break long lines at the edge of the view">
+      <input id="wrap" type="checkbox"> Wrap
+    </label>
+  </div>
+  <div id="notice" class="notice" hidden></div>
+  <div id="message" class="message">Loading…</div>
+  <div id="view" class="view" hidden>
+    <pre id="gutter" class="gutter" aria-hidden="true"></pre>
+    <pre class="code"><code id="code" class="hljs"></code></pre>
+  </div>
+  <script src="../vendor/highlight.min.js"></script>
+  <script type="module" src="script.js"></script>
+</body>
+</html>

@@ -3,7 +3,7 @@ import { useState } from "react";
 import { message } from "../shared/format";
 import { api, encode, salus, setState } from "../shared/salus";
 import type { Candidate, Cell, DatasetDetail, EntryDetail, Slot } from "../shared/types";
-import { Badge, ConfirmButton, Empty, ErrorLine, ReferencePicker } from "../shared/ui";
+import { Badge, DeleteDialog, Empty, ErrorLine, ReferencePicker } from "../shared/ui";
 
 export function EntryForm({ dataset, entry, onEditSchema, onClosed }: { dataset: DatasetDetail; entry: number | null; onEditSchema: () => void; onClosed: () => void }) {
   const queryClient = useQueryClient();
@@ -13,9 +13,11 @@ export function EntryForm({ dataset, entry, onEditSchema, onClosed }: { dataset:
     enabled: entry !== null,
     retry: false,
   });
+  const [deleting, setDeleting] = useState(false);
   const remove = useMutation({
     mutationFn: () => api("DELETE", `/datasets/${encode(dataset.id)}/entries/${entry}`),
     onSuccess: () => {
+      setDeleting(false);
       setState(dataset.id, null).catch(() => undefined);
       onClosed();
     },
@@ -32,9 +34,14 @@ export function EntryForm({ dataset, entry, onEditSchema, onClosed }: { dataset:
         Edit schema
       </button>
       {entry !== null && detail.data && (
-        <ConfirmButton className="small" onConfirm={() => remove.mutate()} title="Delete this entry">
+        <button className="small" title="Delete this entry" onClick={() => setDeleting(true)}>
           Delete
-        </ConfirmButton>
+        </button>
+      )}
+      {deleting && (
+        <DeleteDialog title={`Delete entry #${entry}`} pending={remove.isPending} error={remove.error} onConfirm={() => remove.mutate()} onClose={() => setDeleting(false)}>
+          <div>The entry with all its values is deleted from the dataset. The files and rows it refers to stay untouched. This cannot be undone.</div>
+        </DeleteDialog>
       )}
     </div>
   );

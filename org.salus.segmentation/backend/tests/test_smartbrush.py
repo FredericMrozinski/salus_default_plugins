@@ -68,6 +68,17 @@ class DabTest(unittest.TestCase):
         # The blur mixes the colours near a strong edge, so the exact check stops about 1.5 sigma before it.
         self.assertTrue(mask[sb.OUTER, edge - int(2 * sb.BLUR_SIGMA)])
 
+    def test_inner_radius_sets_the_seeds_and_spacing(self):
+        # Red left of the centre column + 10, blue right of it: a small inner circle seeds only red, a wide one both.
+        img = two_regions(sb.MARGIN + sb.OUTER + 10)
+        edge = sb.OUTER + 10
+        self.assertFalse(sb.dab_mask(img, inner=4)[:, edge:].any())
+        self.assertTrue(sb.dab_mask(img, inner=40)[:, edge + 20:].any())
+        self.assertEqual(sb.Stroke("a.svs", "paint", 1.0, 0, 0, inner=40).spacing, 40)
+        self.assertEqual(sb.Stroke("a.svs", "paint", 1.0, 0, 0, inner=1).spacing, sb.STRIDE)
+        self.assertEqual(sb.check_inner(None), sb.INNER)
+        self.assertEqual(sb.check_inner(10_000), sb.MAX_INNER)
+
     def test_dab_stays_inside_the_outer_circle(self):
         mask = sb.dab_mask(np.full((R, R, 3), 128, np.uint8))
         yy, xx = np.mgrid[0:N, 0:N]
@@ -155,6 +166,9 @@ class BrushAnnotationsTest(Base):
         store.add_area(box(0, 0, 10, 10), other["id"])
         self.assertEqual(store.erase_area(box(0, 0, 5, 10)), 2)
         self.assertEqual([s.geometry.area for s in store.shapes], [50, 50])
+        self.assertEqual(store.summary()["classes"], {str(self.cls["id"]): 1, str(other["id"]): 1})
+        self.assertEqual(store.erase_area(box(5, 0, 7, 10), skip={other["id"]}), 1)  # hidden classes are left alone
+        self.assertEqual(sorted(s.geometry.area for s in store.shapes), [30, 50])
 
 
 if __name__ == "__main__":

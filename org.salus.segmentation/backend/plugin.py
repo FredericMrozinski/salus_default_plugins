@@ -5,17 +5,20 @@ The four components (browser, viewer, tools, classes) share one state, kept here
 selected class and tool. Every change is broadcast on the "events" channel, and each component redraws what concerns it.
 
   GET  /state                                  projects, the open project and the shared state
-  PUT  /state {image?, class_id?, tool?, brush?, opacity?}
+  PUT  /state {image?, class_id?, tool?, mode?, brush?, opacity?, hidden?}
   POST /projects {name, root, extensions, save} | /projects/open {save} | /projects/{id}/use | /projects/{id}/forget
   GET  /fs?path=                               server folders, for choosing the root and save folders
-  GET  /images?rescan=1                        the images of the open project
+  GET  /images?rescan=1                        the images of the open project, with their shape counts and statuses
+  POST /images/remove {images}  GET /images/removed  POST /images/restore {images}   (the files stay)
+  PUT  /images/status {image | images, status} PUT /statuses {statuses: [{id?, name, color}]}
   POST /classes {name, color}                  PATCH /classes/{id} {name?, color?}
   GET  /slide/info?image=  GET /slide/tiles/{slide}/{level}/{tile}
-  GET  /annotations?image=                     GeoJSON
+  GET  /annotations?image=                     GeoJSON          GET /annotations/summary?image= (shapes per class)
   POST /annotations/polygon {image, class_id, points, simplify}
-  POST /annotations/erase {image, points, radius}
-  POST /annotations/undo {image}  /annotations/redo {image}  /annotations/delete {image, id}
-  POST /smartbrush/dab {image, stroke, x, y, scale, mode}  /smartbrush/outline {image, stroke, points?, scale?}
+  POST /annotations/paint {image, points, radius, class_id}  /annotations/erase {image, points, radius}
+  POST /annotations/undo {image}  /annotations/redo {image}  /annotations/delete {image, id}  /annotations/rename {image, id, name}
+  POST /focus {image, bbox, id?}               the viewer zooms to a region (a shape picked in the class editor)
+  POST /smartbrush/dab {image, stroke, x, y, scale, mode, inner}  /smartbrush/outline {image, stroke, points?, scale?, inner?}
   POST /smartbrush/commit {image, stroke, class_id}  /smartbrush/cancel {stroke}
   POST /import/scan, /import/apply             QuPath GeoJSON (see qupath.py)
   GET  /export/settings  POST /export/start {settings, images, overwrite}  GET /export/status  POST /export/cancel
@@ -39,13 +42,18 @@ registry = Registry(Path.home() / ".salus" / "segmentation-projects.json")
 slides = Slides()
 NO_CACHE = [("cache-control", "no-store")]
 TILE_CACHE = [("cache-control", "private, max-age=86400, immutable")]
-TOOLS = ("pan", "polygon", "eraser", "smart", "smarteraser", "smartpolygon")
+TOOLS = ("pan", "brush", "eraser", "polygon")
+# How brush, eraser and polygon work: "exact" draws what is drawn; the others are smart modes, where they follow the
+# image ("color": the color-similarity smart brush of smartbrush.py).
+MODES = ("exact", "color")
 
 lock = threading.RLock()
 project: Project | None = None
 annotation_cache: dict[str, Annotations] = {}
 shape_counts: dict[str, int] = {}
-state = {"image": None, "class_id": None, "tool": "pan", "brush": 30, "opacity": 0.35}
+# brush: the tool width in screen pixels (brush and eraser diameter; twice the smart tools' inner radius)
+# hidden: ids of the classes whose shapes the viewer does not show (and the eraser leaves alone)
+state = {"image": None, "class_id": None, "tool": "pan", "mode": "exact", "brush": 32, "opacity": 0.35, "hidden": []}
 
 
 def broadcast(event: dict) -> None:
@@ -103,9 +111,24 @@ def use_project(p: Project) -> None:
         shape_counts.clear()
         registry.remember(p)
         state["image"] = None
+        state["hidden"] = []
         classes = p.data["classes"]
         state["class_id"] = classes[0]["id"] if classes else None
     broadcast({"type": "state", "state": full_state()})
+
+
+def reveal(class_id: int) -> None:
+    """Drawing with a hidden class shows it again, so that what is drawn can be seen."""
+    with lock:
+        if class_id not in state["hidden"]:
+            return
+        state["hidden"] = [i for i in state["hidden"] if i != class_id]
+    broadcast({"type": "state", "state": full_state()})
+
+
+def hidden_classes() -> set[int]:
+    with lock:
+        return set(state["hidden"])
 
 
 def changed_annotations(image: str, store: Annotations) -> dict:
@@ -139,10 +162,23 @@ def put_state(req):
             if data["tool"] not in TOOLS:
                 raise ViewerError("Unknown tool.")
             state["tool"] = data["tool"]
+        if "mode" in data:
+            if data["mode"] not in MODES:
+                raise ViewerError("Unknown mode.")
+            state["mode"] = data["mode"]
         if "brush" in data:
-            state["brush"] = max(2, min(400, int(data["brush"])))
+            state["brush"] = max(4, min(200, int(data["brush"])))
         if "opacity" in data:
             state["opacity"] = max(0.0, min(1.0, float(data["opacity"])))
+        if "hidden" in data:
+            if not isinstance(data["hidden"], list):
+                raise ViewerError("Give the hidden classes as a list.")
+            hidden = []
+            for class_id in data["hidden"]:
+                need_project().cls(int(class_id))
+                if int(class_id) not in hidden:
+                    hidden.append(int(class_id))
+            state["hidden"] = hidden
     result = full_state()
     broadcast({"type": "state", "state": result})
     return result
@@ -222,8 +258,63 @@ def images(req):
     for rel in paths:
         if rel not in shape_counts:
             shape_counts[rel] = count_shapes(p.annotation_file(rel))
-        out.append({"path": rel, "shapes": shape_counts[rel]})
+        out.append({"path": rel, "shapes": shape_counts[rel], "status": p.status_of(rel)})
     return salus.Response.json({"images": out}, headers=NO_CACHE)
+
+
+@app.route("PUT", "/images/status")
+@guarded
+def set_image_status(req):
+    """The status of one image ({image, status}) or of several ({images: [...], status})."""
+    data = body(req)
+    p = need_project()
+    images = data["images"] if "images" in data else [data.get("image")]
+    if not isinstance(images, list) or not images:
+        raise ViewerError("Choose at least one image.")
+    for image in images:
+        p.image_path(image)
+    status = p.set_status(images, data.get("status"))
+    broadcast({"type": "status", "images": images, "status": status})
+    return {"images": images, "status": status}
+
+
+@app.route("POST", "/images/remove")
+@guarded
+def remove_images(req):
+    """Takes images out of the project; their files and annotations stay. The open image, if removed, is closed."""
+    p = need_project()
+    removed = p.remove_images(body(req).get("images"))
+    with lock:
+        closed = state["image"] in removed
+        if closed:
+            state["image"] = None
+    broadcast({"type": "images"})
+    if closed:
+        broadcast({"type": "state", "state": full_state()})
+    return {"removed": removed}
+
+
+@app.route("GET", "/images/removed")
+@guarded
+def removed_images(req):
+    return salus.Response.json({"images": need_project().removed_images()}, headers=NO_CACHE)
+
+
+@app.route("POST", "/images/restore")
+@guarded
+def restore_images(req):
+    restored = need_project().restore_images(body(req).get("images"))
+    broadcast({"type": "images"})
+    return {"restored": restored}
+
+
+@app.route("PUT", "/statuses")
+@guarded
+def set_statuses(req):
+    """The whole list of statuses, edited: [{id?, name, color}] in order (the first is the default)."""
+    statuses = need_project().set_statuses(body(req).get("statuses"))
+    broadcast({"type": "state", "state": full_state()})
+    return {"statuses": statuses}
 
 
 @app.route("POST", "/classes")
@@ -306,6 +397,15 @@ def get_annotations(req):
         return salus.Response.json({**store.to_geojson(), **store.summary()}, headers=NO_CACHE)
 
 
+@app.route("GET", "/annotations/summary")
+@guarded
+def annotations_summary(req):
+    """The numbers of shapes (in all and per class) of an image, without the shapes."""
+    store = annotations_of(req.query.get("image", ""))
+    with store.lock:
+        return salus.Response.json(store.summary(), headers=NO_CACHE)
+
+
 @app.route("POST", "/annotations/polygon")
 @guarded
 def add_polygon(req):
@@ -318,7 +418,25 @@ def add_polygon(req):
     except (TypeError, ValueError):
         raise ViewerError("Choose a class first.") from None
     new_id = store.add_polygon(data.get("points"), class_id, simplify)
+    reveal(class_id)
     return {"id": new_id, **changed_annotations(image, store)}
+
+
+@app.route("POST", "/annotations/paint")
+@guarded
+def paint(req):
+    data = body(req)
+    image = data.get("image")
+    store = annotations_of(image)
+    try:
+        radius = float(data.get("radius"))
+        class_id = int(data.get("class_id"))
+    except (TypeError, ValueError):
+        raise ViewerError("Choose a class first.") from None
+    changed = int(store.paint(data.get("points"), radius, class_id) is not None)
+    if changed:
+        reveal(class_id)
+    return {"changed": changed, **(changed_annotations(image, store) if changed else store.summary())}
 
 
 @app.route("POST", "/annotations/erase")
@@ -331,7 +449,7 @@ def erase(req):
         radius = float(data.get("radius"))
     except (TypeError, ValueError):
         raise ViewerError("Invalid eraser size.") from None
-    changed = store.erase(data.get("points"), radius)
+    changed = store.erase(data.get("points"), radius, hidden_classes())
     return {"changed": changed, **(changed_annotations(image, store) if changed else store.summary())}
 
 
@@ -367,7 +485,8 @@ def smart_dab(req):
             if data.get("mode") not in ("paint", "erase"):
                 raise ViewerError("Unknown brush mode.")
             path = need_project().image_path(image)
-            stroke = strokes[key] = sb.Stroke(image, data["mode"], sb.check_scale(data.get("scale")), x, y)
+            stroke = strokes[key] = sb.Stroke(image, data["mode"], sb.check_scale(data.get("scale")), x, y,
+                                              sb.check_inner(data.get("inner")))
             stroke.slide = slides.open(str(path), req.frontend_id)  # the viewer has it open already
     if stroke.image != image:
         raise ViewerError("This stroke belongs to another image.", 409)
@@ -394,7 +513,7 @@ def smart_outline(req):
             if len(points) < 3:
                 raise ViewerError("A polygon needs at least three points.")
             path = need_project().image_path(image)
-            stroke = sb.Stroke(image, "paint", sb.check_scale(data.get("scale")), *points[0])
+            stroke = sb.Stroke(image, "paint", sb.check_scale(data.get("scale")), *points[0], sb.check_inner(data.get("inner")))
             stroke.outline(points)
             stroke.slide = slides.open(str(path), req.frontend_id)
             strokes[key] = stroke
@@ -420,13 +539,15 @@ def smart_commit(req):
     if geometry is None:
         return {"changed": 0, **store.summary()}
     if stroke.mode == "erase":
-        changed = store.erase_area(geometry)
+        changed = store.erase_area(geometry, hidden_classes())
     else:
         try:
             class_id = int(data.get("class_id"))
         except (TypeError, ValueError):
             raise ViewerError("Choose a class first.") from None
         changed = int(store.add_area(geometry, class_id) is not None)
+        if changed:
+            reveal(class_id)
     return {"changed": changed, **(changed_annotations(stroke.image, store) if changed else store.summary())}
 
 
@@ -444,6 +565,37 @@ def delete_shape(req):
     store = annotations_of(data.get("image"))
     store.delete(str(data.get("id")))
     return changed_annotations(data.get("image"), store)
+
+
+@app.route("POST", "/annotations/rename")
+@guarded
+def rename_shape(req):
+    """Names a shape ({image, id, name}); an empty name gives it back its generic one. Can be undone."""
+    data = body(req)
+    store = annotations_of(data.get("image"))
+    if store.rename(str(data.get("id")), data.get("name")):
+        return changed_annotations(data.get("image"), store)
+    return store.summary()
+
+
+@app.route("POST", "/focus")
+@guarded
+def focus(req):
+    """Asks the viewer to show a region ({image, bbox: [x0, y0, x1, y1] in level-0 pixels, id?}), e.g. a shape picked in
+    the class editor; the viewer fits it into the middle of its view and outlines the shape `id`. Without a bbox the
+    picked shape is let go ({image, id: null}), e.g. after a click beside it in the viewer."""
+    data = body(req)
+    if data.get("bbox") is None:
+        broadcast({"type": "focus", "image": data.get("image"), "bbox": None, "id": None})
+        return {}
+    try:
+        bbox = [float(v) for v in data.get("bbox")]
+    except (TypeError, ValueError):
+        raise ViewerError("Invalid region.") from None
+    if len(bbox) != 4:
+        raise ViewerError("Invalid region.")
+    broadcast({"type": "focus", "image": data.get("image"), "bbox": bbox, "id": data.get("id")})
+    return {}
 
 
 @app.route("POST", "/annotations/undo")

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""File viewer backend: one backend for the image, table and PDF viewers.
+"""File viewer backend: one backend for the slide, image, table, PDF and text viewers.
 
   slide  GET /slide/info?file=, GET /slide/tiles/{slide}/{level}/{tile}   (slides.py: whole slide images, OpenSlide)
   image  GET /image/info?file=, GET /image/tiles/{id}/{level}/{tile}      (pictures.py: png, jpeg, ... rendered by Pillow)
   table  GET /table/open?file=, GET /table/rows?file=&table=...           (tables.py)
          /table/edit/...                                                  (table_edit.py: editing CSV and TSV files)
   pdf    GET /pdf/info?file=, GET /pdf/page/{doc}/{page}?scale=           (pdfs.py; renders pages, never sends the file)
+  text   GET /text/open?file=                                             (texts.py: decoded text; the viewer highlights it)
 
 Every request names the file, so one backend serves any number of open viewers. Add a viewer by adding a module,
 its routes here and a component in the manifest.
@@ -18,6 +19,7 @@ from pathlib import Path
 
 import pdfs
 import salus_sdk as salus
+import texts
 from errors import ViewerError
 from pictures import Pictures
 from slides import Slides
@@ -314,6 +316,17 @@ async def pdf_page(req):
         raise fail(e) from None
     # No caching in the browser: the pages of a private document should not be left lying around.
     return salus.Response.bytes(data, content_type="image/png", headers=NO_CACHE)
+
+
+# --------------------------------------------------------------------------- text
+
+@app.route("GET", "/text/open")
+async def text_open(req):
+    try:
+        data = await asyncio.to_thread(texts.read, file_arg(req))
+    except ViewerError as e:
+        raise fail(e) from None
+    return salus.Response.json(data, headers=NO_CACHE)
 
 
 if __name__ == "__main__":

@@ -61,5 +61,13 @@ export function modal(title, content, buttons) {
   return () => backdrop.remove();
 }
 
+// Space held pans the viewer. In a panel whose button still has the keyboard focus after a click (Undo, a tool, a
+// class ...), Space would press that button instead, so it does nothing on buttons here (dialogs excepted).
+for (const type of ["keydown", "keyup", "keypress"]) {
+  window.addEventListener(type, (event) => {
+    if (event.key === " " && event.target.closest?.("button, [role=radio], [role=menuitem]") && !document.querySelector(".backdrop")) event.preventDefault();
+  }, true);
+}
+
 export const fileName = (path) => path.split("/").pop();
 export const dirName = (path) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "");

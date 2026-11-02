@@ -2,7 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api, encode } from "../shared/salus";
 import { Constraints, DatasetDetail, Slot, SlotKind, SourceNode, VALUE_TYPES } from "../shared/types";
-import { ErrorLine, Field, flattenSources, useTree } from "../shared/ui";
+import { DeleteDialog, ErrorLine, Field, flattenSources, useTree } from "../shared/ui";
 
 /** A slot as edited: numbers and lists are held as text until saved. */
 type Draft = {
@@ -120,10 +120,10 @@ export function SchemaEditor({ dataset, onDone }: { dataset: DatasetDetail; onDo
       copy.splice(index + by, 0, item);
       return copy;
     });
-  const remove = (d: Draft) => {
-    if (d.id && !window.confirm(`Remove the field “${d.label || d.name}”? Its values in all entries are deleted when you save.`)) return;
-    setDrafts((all) => all.filter((x) => x.key !== d.key));
-  };
+  // A saved field has values in the entries, so removing it asks for the word "delete"; a new one just goes.
+  const [removing, setRemoving] = useState<Draft | null>(null);
+  const drop = (d: Draft) => setDrafts((all) => all.filter((x) => x.key !== d.key));
+  const remove = (d: Draft) => (d.id ? setRemoving(d) : drop(d));
 
   return (
     <div className="app">
@@ -159,6 +159,11 @@ export function SchemaEditor({ dataset, onDone }: { dataset: DatasetDetail; onDo
           </div>
         </div>
       </div>
+      {removing && (
+        <DeleteDialog title={`Remove the field “${removing.label || removing.name}”`} action="Remove" onConfirm={() => (drop(removing), setRemoving(null))} onClose={() => setRemoving(null)}>
+          <div>Its values in all entries are deleted when you save the schema.</div>
+        </DeleteDialog>
+      )}
     </div>
   );
 }

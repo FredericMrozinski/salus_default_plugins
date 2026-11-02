@@ -5,7 +5,7 @@ Design: `design/dataset-workbench.md` in the Salus repository.
 
 | Component | Panel | What it does |
 |---|---|---|
-| `browser` (entry) | left | **Sources** tab: folders, source cohorts: file sources (browse, search, upload), table sources (CSV, columns, issues). **Datasets** tab: list, create, delete. |
+| `browser` (entry) | left | **Sources** tab: folders, source cohorts: file sources (browse, search, upload), table sources (CSV, columns, issues). A folder without source cohorts in it can become a general source cohort (right-click › *Convert to general source cohort*; its files become items, nothing moves). **Datasets** tab: list, create, delete. |
 | `dataset-viewer` | right | All entries of one dataset (virtual list, search, state filter), `+ Entry`, statistics. |
 | `entry-editor` | center | Edits one entry (typed value editors, searchable reference pickers, item states, "Mark as valid") and the dataset schema. |
 

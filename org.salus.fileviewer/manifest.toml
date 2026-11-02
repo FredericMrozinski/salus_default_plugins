@@ -1,7 +1,7 @@
 [description]
 name = "File Viewer"
 developer = "Salus Organization"
-description = "Viewers for files other plugins ask Salus to open: whole slide images, pictures (PNG, JPEG, ...), tables (CSV, JSON, SQLite) and PDFs."
+description = "Viewers for files other plugins ask Salus to open: whole slide images, pictures (PNG, JPEG, ...), tables (CSV, JSON, SQLite), PDFs and text files (code, GeoJSON, YAML, logs, ...)."
 contact = "frederic.mrozinski@tum.de"
 version = "0.1.0"
 
@@ -40,3 +40,19 @@ title = "PDF"
 entrypoint = "frontend/pdf/index.html"
 target-panel = "center"
 file_viewer_for = ["pdf"]
+
+# Text with syntax highlighting. Not json, csv or tsv: the table viewer has those (two viewers for a type make Salus ask).
+[[frontend-component]]
+component-name = "text"
+title = "Text"
+entrypoint = "frontend/text/index.html"
+target-panel = "center"
+file_viewer_for = [
+  "txt", "text", "log", "out", "md", "markdown",
+  "geojson", "topojson", "ipynb", "jsonc", "json5",
+  "xml", "kml", "gpx", "svg", "html", "htm", "xsd",
+  "yaml", "yml", "toml", "ini", "cfg", "conf", "properties", "env",
+  "py", "pyi", "js", "mjs", "cjs", "jsx", "ts", "tsx", "css", "scss", "less",
+  "sh", "bash", "zsh", "r", "sql", "c", "h", "cpp", "cc", "hpp", "java", "kt", "rs", "go", "rb", "pl", "lua", "php",
+  "swift", "cs", "groovy", "diff", "patch", "graphql", "mk",
+]

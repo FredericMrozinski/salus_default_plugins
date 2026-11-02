@@ -42,6 +42,23 @@ class ProjectTest(Base):
         self.assertEqual(images, ["a.svs", "linked/deep/d.svs", "sub/b.SVS"])
         self.assertTrue(self.project.image_path("linked/deep/d.svs").is_file())
 
+    def test_images_can_be_removed_and_restored(self):
+        self.project.remove_images(["sub/b.SVS"])
+        self.assertEqual(self.project.images(), ["a.svs"])
+        self.assertEqual(self.project.images(rescan=True), ["a.svs"])
+        self.assertEqual(self.project.removed_images(), ["sub/b.SVS"])
+        self.assertTrue((self.dir / "images/sub/b.SVS").is_file())  # only out of the project, not deleted
+        again = Project.open(self.dir / "save")
+        self.assertEqual(again.images(), ["a.svs"])
+        for bad in ([], ["nope.svs"], ["../a.svs"]):
+            with self.assertRaises(ViewerError):
+                again.remove_images(bad)
+        with self.assertRaises(ViewerError):
+            again.restore_images(["a.svs"])  # not removed
+        again.restore_images(["sub/b.SVS"])
+        self.assertEqual(again.images(), ["a.svs", "sub/b.SVS"])
+        self.assertEqual(again.removed_images(), [])
+
     def test_project_reopens_from_its_save_folder(self):
         again = Project.open(self.dir / "save")
         self.assertEqual(again.id, self.project.id)
@@ -74,6 +91,47 @@ class ProjectTest(Base):
         again = Project.open(self.dir / "save")
         self.assertNotIn("export_color", again.data["classes"][0])
         self.assertEqual(again.export_settings()["classes"][0]["color"], "#010101")
+
+    def test_statuses_default_and_are_kept(self):
+        self.assertEqual([s["name"] for s in self.project.data["statuses"]], ["Empty", "To review", "Reviewed"])
+        empty, review, done = (s["id"] for s in self.project.data["statuses"])
+        self.assertEqual(self.project.status_of("a.svs"), empty)
+        self.project.set_status("a.svs", done)
+        self.project.set_status("sub/b.SVS", review)
+        with self.assertRaises(ViewerError):
+            self.project.set_status("a.svs", 99)
+        self.assertEqual(Project.open(self.dir / "save").status_of("a.svs"), done)
+        self.project.set_status(["a.svs", "sub/b.SVS"], empty)  # several at once
+        self.assertEqual({self.project.status_of(r) for r in ("a.svs", "sub/b.SVS")}, {empty})
+        for bad in ([], ["../x.svs"]):
+            with self.assertRaises(ViewerError):
+                self.project.set_status(bad, done)
+
+    def test_statuses_can_be_edited(self):
+        empty, review, done = (s["id"] for s in self.project.data["statuses"])
+        self.project.set_status("a.svs", done)
+        self.project.set_status("sub/b.SVS", review)
+        # rename and recolor "Reviewed", drop "To review", add one in front (the new default)
+        out = self.project.set_statuses([{"name": "Todo", "color": "#FF0000"}, {"id": empty, "name": "Empty", "color": "#9e9e9e"},
+                                         {"id": done, "name": "Done", "color": "#00ff00"}])
+        self.assertEqual([s["name"] for s in out], ["Todo", "Empty", "Done"])
+        self.assertEqual(out[0]["color"], "#ff0000")
+        self.assertNotIn(out[0]["id"], (empty, review, done))
+        self.assertEqual(self.project.status_of("a.svs"), done)
+        self.assertEqual(self.project.status_of("sub/b.SVS"), out[0]["id"])  # its status is gone: the first one
+        for bad in ([], [{"name": "", "color": "#000000"}], [{"name": "A", "color": "red"}],
+                    [{"name": "A", "color": "#000000"}, {"name": "a", "color": "#111111"}]):
+            with self.assertRaises(ViewerError):
+                self.project.set_statuses(bad)
+
+    def test_old_projects_get_the_default_statuses(self):
+        data = json.loads((self.dir / "save/project.json").read_text())
+        for key in ("statuses", "next_status_id", "image_status"):
+            del data[key]
+        (self.dir / "save/project.json").write_text(json.dumps(data))
+        again = Project.open(self.dir / "save")
+        self.assertEqual(len(again.info()["statuses"]), 3)
+        self.assertEqual(again.status_of("a.svs"), 1)
 
     def test_paths_cannot_leave_the_root(self):
         for bad in ("../x.svs", "/etc/passwd", "a/../../x", ""):
@@ -127,6 +185,17 @@ class AnnotationTest(Base):
         store.erase([[0, 0], [100, 100], [0, 100], [100, 0]], 200)  # everything
         self.assertEqual(store.shapes, [])
         self.assertEqual(store.erase([[500, 500]], 5), 0)  # nothing there
+
+    def test_brush_paints_and_merges_with_its_class(self):
+        store = self.store()
+        store.add_polygon(SQUARE, self.cls["id"])
+        store.paint([[150, 50]], 10, self.cls["id"])                 # apart: a shape of its own
+        self.assertEqual(len(store.shapes), 2)
+        store.paint([[90, 50], [160, 50]], 15, self.cls["id"])       # bridges both
+        self.assertEqual(len(store.shapes), 1)
+        self.assertGreater(store.shapes[0].geometry.area, 10000)
+        with self.assertRaises(ViewerError):
+            store.paint([], 10, self.cls["id"])
 
     def test_eraser_makes_holes(self):
         store = self.store()

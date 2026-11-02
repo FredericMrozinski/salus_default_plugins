@@ -2,7 +2,7 @@
 
 A project lives in its save folder:
 
-    <save>/project.json                     name, root folder, file types, classes, export settings
+    <save>/project.json                     name, root folder, file types, classes, statuses (and each image's), export settings
     <save>/annotations/<image path>.geojson one file per annotated image (<image path> is relative to the root)
 
 The images themselves stay where they are; only annotations are written.
@@ -24,6 +24,8 @@ ANNOTATIONS_DIR = "annotations"
 FORMAT_VERSION = 1
 HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 DOWNSAMPLES = (1, 2, 4, 8, 16, 32)  # the resolutions pixel maps can be exported at (1 = full resolution)
+# The review statuses a new project starts with; the first one is the status of images that never got one.
+DEFAULT_STATUSES = [("Empty", "#9e9e9e"), ("To review", "#f2c200"), ("Reviewed", "#3cb44b")]
 
 
 def write_json_atomic(path: Path, data) -> None:
@@ -74,6 +76,14 @@ def check_rel(rel) -> str:
     return rel
 
 
+def add_status_defaults(data: dict) -> None:
+    if not data.get("statuses"):
+        data["statuses"] = [{"id": i, "name": n, "color": c} for i, (n, c) in enumerate(DEFAULT_STATUSES, 1)]
+    data.setdefault("next_status_id", max(s["id"] for s in data["statuses"]) + 1)
+    data.setdefault("image_status", {})  # image path -> status id
+    data.setdefault("removed", [])  # paths of the images removed from the project (the files stay)
+
+
 def absolute_dir(value, label: str) -> Path:
     path = Path(str(value or "").strip()).expanduser()
     if not str(value or "").strip() or not path.is_absolute():
@@ -107,6 +117,7 @@ class Project:
         save.mkdir(parents=True, exist_ok=True)
         data = {"format": FORMAT_VERSION, "id": uuid.uuid4().hex, "name": name, "root": str(root),
                 "extensions": normalize_extensions(extensions), "classes": [], "next_class_id": 1}
+        add_status_defaults(data)
         project = cls(save, data)
         project.write()
         return project
@@ -126,6 +137,7 @@ class Project:
         data.setdefault("classes", [])
         data.setdefault("next_class_id", max([c["id"] for c in data["classes"]] + [0]) + 1)
         data.setdefault("extensions", [".svs"])
+        add_status_defaults(data)  # projects made before there were statuses
         # Projects of the first version kept an export color in each class; it is an export setting now.
         for c in data["classes"]:
             if "export_color" in c:
@@ -148,10 +160,48 @@ class Project:
     def info(self) -> dict:
         return {"id": self.id, "name": self.data["name"], "root": self.data["root"], "save": str(self.save),
                 "extensions": self.data["extensions"], "classes": self.data["classes"],
-                "root_missing": not self.root.is_dir()}
+                "statuses": self.data["statuses"], "root_missing": not self.root.is_dir()}
 
     # -- images
     def images(self, rescan: bool = False) -> list[str]:
+        """The images of the project: those found below the root, less those removed from the project."""
+        with self.lock:
+            removed = set(self.data["removed"])
+            return [rel for rel in self._found(rescan) if rel not in removed]
+
+    def removed_images(self) -> list[str]:
+        """The images removed from the project that are still in the image folder."""
+        with self.lock:
+            removed = set(self.data["removed"])
+            return [rel for rel in self._found() if rel in removed]
+
+    def remove_images(self, rels) -> list[str]:
+        """Takes images out of the project (they are no longer listed, imported into or exported). Nothing is deleted:
+        the image files and their annotations stay where they are, and the images can be put back."""
+        with self.lock:
+            rels = self._check_images(rels, self._found())
+            self.data["removed"] = sorted(set(self.data["removed"]) | set(rels), key=str.lower)
+            self.write()
+            return rels
+
+    def restore_images(self, rels) -> list[str]:
+        with self.lock:
+            rels = self._check_images(rels, self.data["removed"])
+            self.data["removed"] = [rel for rel in self.data["removed"] if rel not in set(rels)]
+            self.write()
+            return rels
+
+    @staticmethod
+    def _check_images(rels, known) -> list[str]:
+        if not isinstance(rels, list) or not rels:
+            raise ViewerError("Choose at least one image.")
+        known = set(known)
+        for rel in rels:
+            if check_rel(rel) not in known:
+                raise ViewerError(f"{rel} is not an image of this project.", 404)
+        return rels
+
+    def _found(self, rescan: bool = False) -> list[str]:
         """Paths of the images below the root, in all subfolders (relative, with /), sorted. Linked folders are
         followed, each real folder once (so link cycles end)."""
         with self.lock:
@@ -210,6 +260,59 @@ class Project:
                 target["color"] = check_color(changes["color"], "drawing color")
             self.write()
             return target
+
+    # -- review statuses: a list the project defines (name and color); every image has one, the first by default
+    def status_of(self, rel: str) -> int:
+        statuses = self.data["statuses"]
+        stored = self.data["image_status"].get(rel)
+        return stored if any(s["id"] == stored for s in statuses) else statuses[0]["id"]
+
+    def set_status(self, rels, status_id) -> int:
+        """Gives one image (a path) or several (a list of paths) the status, in one write."""
+        with self.lock:
+            rels = [rels] if isinstance(rels, str) else rels
+            if not isinstance(rels, list) or not rels:
+                raise ViewerError("Choose at least one image.")
+            for rel in rels:
+                check_rel(rel)
+            if not any(s["id"] == status_id for s in self.data["statuses"]):
+                raise ViewerError("No such status.", 404)
+            for rel in rels:
+                self.data["image_status"][rel] = status_id
+            self.write()
+            return status_id
+
+    def set_statuses(self, entries) -> list[dict]:
+        """Replaces the list of statuses (in order; the first is the default). Entries with the `id` of a status keep
+        it, and its images keep it too; the others are new. Images whose status is left out get the first one."""
+        with self.lock:
+            if not isinstance(entries, list) or not entries:
+                raise ViewerError("Keep at least one status.")
+            known = {s["id"] for s in self.data["statuses"]}
+            out, names = [], set()
+            next_id = self.data["next_status_id"]
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    raise ViewerError("Invalid status.")
+                name = str(entry.get("name") or "").strip()
+                if not name:
+                    raise ViewerError("Give every status a name.")
+                if len(name) > 50:
+                    raise ViewerError("The name is too long.")
+                if name.lower() in names:
+                    raise ViewerError(f"There are two statuses called {name}.")
+                names.add(name.lower())
+                color = check_color(entry.get("color"), f"color of {name}")
+                status_id = entry.get("id")
+                if status_id not in known or any(s["id"] == status_id for s in out):
+                    status_id, next_id = next_id, next_id + 1
+                out.append({"id": status_id, "name": name, "color": color})
+            ids = {s["id"] for s in out}
+            self.data["statuses"] = out
+            self.data["next_status_id"] = next_id
+            self.data["image_status"] = {rel: i for rel, i in self.data["image_status"].items() if i in ids}
+            self.write()
+            return out
 
     # -- export settings: which color each class gets in pixel maps, which class wins where shapes overlap, ...
     def export_settings(self) -> dict:

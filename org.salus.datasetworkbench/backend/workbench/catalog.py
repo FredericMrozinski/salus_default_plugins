@@ -139,6 +139,24 @@ class Catalog:
         self.tree()
         return source
 
+    def convert_group(self, rel: str) -> Source:
+        """Turns a folder into a general (file) source cohort with its name. The files in it, in subfolders too, become
+        its items; nothing is moved. A folder holding source cohorts cannot become one (a source cohort cannot contain
+        any), and neither can one inside a source cohort."""
+        path = self._group_path(rel)
+        if path == self.sources_dir:
+            raise WorkbenchError("The top level cannot become a source cohort.")
+        for folder in path.parents:
+            if folder.resolve() == self.sources_dir.resolve():
+                break
+            if (folder / SOURCE_DB).exists():
+                raise WorkbenchError("The folder is inside a source cohort.")
+        if any((p / SOURCE_DB).exists() for p in path.rglob("*") if p.is_dir()):
+            raise WorkbenchError("The folder contains source cohorts, so it cannot become one itself.")
+        source = Source.create(path, check_name(path.name, "source cohort name"), "file")
+        self.tree()
+        return source
+
     def remove_source(self, source_id: str, delete_files: bool = False) -> None:
         """Forgets a source (its metadata goes away, the files stay) or, with `delete_files`, deletes its folder from disk."""
         source = self.find_source(source_id)

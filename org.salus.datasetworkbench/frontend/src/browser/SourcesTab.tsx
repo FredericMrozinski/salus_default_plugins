@@ -10,7 +10,7 @@ import { Empty, ErrorLine, flattenSources, useTree } from "../shared/ui";
 import { copyText, openPath } from "./actions";
 import { Dropped, fromDrop } from "./upload";
 import { openUploadPanel } from "./uploadQueue";
-import { canMove, DeleteGroupDialog, DeleteItemDialog, IssuesDialog, MoveDialog, moveNode, NewGroupDialog, NewSourceDialog, RemoveSourceDialog, RenameDialog, TableSetupDialog } from "./dialogs";
+import { canMove, ConvertGroupDialog, DeleteGroupDialog, DeleteItemDialog, IssuesDialog, MoveDialog, moveNode, NewGroupDialog, NewSourceDialog, RemoveSourceDialog, RenameDialog, TableSetupDialog } from "./dialogs";
 
 type Dialog =
   | { type: "group"; parent: string }
@@ -20,6 +20,7 @@ type Dialog =
   | { type: "upload"; source: SourceNode; folder?: string; initial?: Dropped }
   | { type: "remove"; source: SourceNode }
   | { type: "delete-group"; path: string }
+  | { type: "convert-group"; path: string }
   | { type: "move"; path: string }
   | { type: "rename-group"; path: string }
   | { type: "rename-source"; source: SourceNode }
@@ -235,6 +236,9 @@ export function SourcesTab() {
           }}
         />
       )}
+      {dialog?.type === "convert-group" && (
+        <ConvertGroupDialog path={dialog.path} onClose={() => setDialog(null)} onConverted={() => setSelectedGroup("")} />
+      )}
       {dialog?.type === "move" && <MoveDialog path={dialog.path} onClose={() => setDialog(null)} onMoved={() => setSelectedGroup("")} />}
       {dialog?.type === "rename-group" && (
         <RenameDialog
@@ -384,6 +388,9 @@ function Group({ node, depth, selected, onSelect, onDialog }: NodeProps & { node
           showMenu(e, [
             ...newItems(node.path, onDialog, { folder: "New folder here", file: "New general source cohort here", table: "New tabular source cohort here" }),
             "separator",
+            // A folder holding source cohorts cannot become one (a source cohort cannot contain any).
+            { label: "Convert to general source cohort…", icon: <Icon name="database" />, disabled: flattenSources(node.children).length > 0,
+              onSelect: () => onDialog({ type: "convert-group", path: node.path }) },
             { label: "Move to…", onSelect: () => onDialog({ type: "move", path: node.path }) },
             { label: "Rename…", icon: <Icon name="edit" />, onSelect: () => onDialog({ type: "rename-group", path: node.path }) },
             { label: "Delete from disk…", icon: <Icon name="delete" />, danger: true, onSelect: () => onDialog({ type: "delete-group", path: node.path }) },

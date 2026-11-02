@@ -62,7 +62,8 @@ def summarize(features: list[dict]) -> tuple[dict[str, int], int]:
     return classes, skipped
 
 
-def shapes_for(features: list[dict], mapping: dict[str, int | None]) -> list[tuple[int, BaseGeometry]]:
+def shapes_for(features: list[dict], mapping: dict[str, int | None]) -> list[tuple[int, BaseGeometry, str | None]]:
+    """(class id, geometry, name) of the area annotations whose class is mapped; names given in QuPath are kept."""
     out = []
     for feature in features:
         class_id = mapping.get(class_name(feature))
@@ -70,7 +71,9 @@ def shapes_for(features: list[dict], mapping: dict[str, int | None]) -> list[tup
             continue
         geometry = area_geometry(feature)
         if geometry is not None:
-            out.append((class_id, geometry))
+            name = (feature.get("properties") or {}).get("name")
+            name = " ".join(name.split())[:200] if isinstance(name, str) else ""
+            out.append((class_id, geometry, name or None))
     return out
 
 

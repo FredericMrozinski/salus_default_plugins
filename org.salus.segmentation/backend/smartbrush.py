@@ -35,8 +35,9 @@ from shapely.geometry.base import BaseGeometry
 from errors import ViewerError
 from slides import OVERVIEW_REDUCTION
 
-# Brush settings, in screen pixels (not exposed for now).
-INNER = 16        # seeds: every lattice point inside this radius
+# Brush settings, in screen pixels (not exposed for now, except the inner radius: half the width set in the tools).
+INNER = 16        # seeds: every lattice point inside this radius (the default; strokes get theirs from the viewer)
+MAX_INNER = 100
 OUTER = 200       # the flood never leaves this radius
 BITS = 3          # bits per colour channel of the buckets
 TOL = 1           # buckets within this many steps of the seed's bucket pass the first check
@@ -45,7 +46,7 @@ GAP = 40          # gaps up to this long are filled ...
 ALL4 = True       # ... only when enclosed left, right, above and below
 STRIDE = 4        # the flood walks every STRIDE-th row and column
 BLUR_SIGMA = 5.0  # Gaussian blur of the region before bucketing
-SPACING = INNER   # distance between dabs along a stroke
+SPACING = INNER   # distance between dabs along a stroke: the inner radius (at least STRIDE)
 MARGIN = int(math.ceil(3 * BLUR_SIGMA))  # extra pixels read around the brush, so the blur has no border effects
 MAX_READ = 4096   # px per side read from a slide level for one dab; zoomed further out, the slide's overview is used
 
@@ -93,7 +94,7 @@ def _accept_set(bucket: int) -> frozenset:
                      if r + dr >= 0 and g + dg >= 0 and 0 <= b + db <= 255 and g + dg <= 255)
 
 
-def flood(ids: np.ndarray, exact: np.ndarray, keep_seeds=None) -> np.ndarray:
+def flood(ids: np.ndarray, exact: np.ndarray, keep_seeds=None, inner: int = INNER) -> np.ndarray:
     """The dab without gap filling: a bool mask of the (2*OUTER+1)^2 window centred on the brush.
     `keep_seeds(rows, cols)` (window coordinates) can restrict the seeds, e.g. to the inside of a polygon."""
     n = 2 * OUTER + 1
@@ -109,7 +110,7 @@ def flood(ids: np.ndarray, exact: np.ndarray, keep_seeds=None) -> np.ndarray:
     epad[1:-1, 1:-1] = exact
     rgb = epad.ravel().tolist()
 
-    seeds = (d2 <= INNER * INNER) & ((yy - c) % STRIDE == 0) & ((xx - c) % STRIDE == 0)
+    seeds = (d2 <= inner * inner) &((yy - c) % STRIDE == 0) & ((xx - c) % STRIDE == 0)
     rc = np.argwhere(seeds)
     if keep_seeds is not None:
         rc = rc[keep_seeds(rc[:, 0], rc[:, 1])]
@@ -175,10 +176,10 @@ def fill_gaps(mask: np.ndarray, gap: int = GAP, all4: bool = ALL4) -> np.ndarray
     return (m | ((h & v) if all4 else (h | v))).cpu().numpy()
 
 
-def dab_mask(region: np.ndarray, keep_seeds=None) -> np.ndarray:
+def dab_mask(region: np.ndarray, keep_seeds=None, inner: int = INNER) -> np.ndarray:
     """A region of (2*(OUTER+MARGIN)+1)^2 RGB pixels centred on the brush -> the dab's mask, (2*OUTER+1)^2."""
     ids, exact = prepare(region)
-    return fill_gaps(flood(ids, exact, keep_seeds))
+    return fill_gaps(flood(ids, exact, keep_seeds, inner))
 
 
 # --------------------------------------------------------------------------- masks to polygons
@@ -209,8 +210,10 @@ class Stroke:
     """The dabs of one stroke in a grid of screen pixels: grid pixel (u, v) covers level-0
     [x0 + u/scale, x0 + (u+1)/scale) x [y0 + v/scale, ...), with (x0, y0) the stroke's first point."""
 
-    def __init__(self, image: str, mode: str, scale: float, x: float, y: float):
+    def __init__(self, image: str, mode: str, scale: float, x: float, y: float, inner: int = INNER):
         self.image, self.mode, self.scale = image, mode, scale
+        self.inner = inner
+        self.spacing = max(STRIDE, inner)
         self.x0, self.y0 = x, y
         self.last: tuple[int, int] | None = None
         self.dabs: list[tuple[int, int, np.ndarray]] = []  # (u, v) of the window's top-left, mask
@@ -222,7 +225,7 @@ class Stroke:
         return int(math.floor((x - self.x0) * self.scale)), int(math.floor((y - self.y0) * self.scale))
 
     def _dab(self, read_region, pu: int, pv: int, keep_seeds=None) -> dict | None:
-        mask = dab_mask(read_region(self, pu, pv), keep_seeds)
+        mask = dab_mask(read_region(self, pu, pv), keep_seeds, self.inner)
         u0, v0 = pu - OUTER, pv - OUTER
         self.dabs.append((u0, v0, mask))
         if not mask.any():
@@ -232,7 +235,7 @@ class Stroke:
                 "w": n / self.scale, "h": n / self.scale, "png": png_of(mask)}
 
     def outline(self, points: list[tuple[float, float]]) -> None:
-        """Makes this stroke a smart polygon: the polygon (level-0 points) is filled, and dabs placed SPACING apart
+        """Makes this stroke a smart polygon: the polygon (level-0 points) is filled, and dabs placed `spacing` apart
         along its boundary, seeded only inside it, grow it out to the edges around it."""
         s = self.scale
         ring = [((x - self.x0) * s, (y - self.y0) * s) for x, y in points]
@@ -243,7 +246,7 @@ class Stroke:
         self.polygon = shapely.union_all(parts)
         shapely.prepare(self.polygon)
         for line in shapely.get_parts(self.polygon.boundary):
-            for d in np.arange(0, line.length, SPACING):
+            for d in np.arange(0, line.length, self.spacing):
                 p = line.interpolate(d)
                 self.todo.append((int(math.floor(p.x)), int(math.floor(p.y))))
 
@@ -260,13 +263,13 @@ class Stroke:
         return out
 
     def to_dab(self, read_region, x: float, y: float) -> list[dict]:
-        """Adds dabs from the last point to (x, y) (level 0), SPACING screen pixels apart. Returns them for the viewer."""
+        """Adds dabs from the last point to (x, y) (level 0), `spacing` screen pixels apart. Returns them for the viewer."""
         u, v = self.grid(x, y)
         if self.last is None:
             points = [(u, v)]
         else:
             lu, lv = self.last
-            steps = max(abs(u - lu), abs(v - lv)) // SPACING
+            steps = max(abs(u - lu), abs(v - lv)) // self.spacing
             if steps == 0:
                 return []
             points = [(lu + (u - lu) * i // steps, lv + (v - lv) * i // steps) for i in range(1, steps + 1)]
@@ -329,6 +332,16 @@ def slide_reader(slide):
         return np.asarray(flat.resize((size, size), Image.BILINEAR, box=box))
 
     return read
+
+
+def check_inner(inner) -> int:
+    """The inner radius a viewer asks for (missing: the default)."""
+    if inner is None:
+        return INNER
+    try:
+        return max(1, min(MAX_INNER, int(round(float(inner)))))
+    except (TypeError, ValueError):
+        raise ViewerError("Invalid brush width.") from None
 
 
 def check_scale(scale) -> float:

@@ -4,7 +4,7 @@ import { api, encode, navigate, onEvent, setState } from "../shared/salus";
 import type { DatasetDetail, DatasetSummary } from "../shared/types";
 import { Icon } from "../shared/icons";
 import { useMenu } from "../shared/menu";
-import { Badge, Empty, ErrorLine, Field, Modal } from "../shared/ui";
+import { Badge, DeleteDialog, Empty, ErrorLine, Field, Modal } from "../shared/ui";
 import { RenameDialog } from "./dialogs";
 
 export function DatasetsTab() {
@@ -90,18 +90,11 @@ export function DatasetsTab() {
         />
       )}
       {deleting && (
-        <Modal title={`Delete dataset “${deleting.name}”`} onClose={() => setDeleting(null)}>
+        <DeleteDialog title={`Delete dataset “${deleting.name}”`} pending={remove.isPending} error={remove.error} onConfirm={() => remove.mutate(deleting.id)} onClose={() => setDeleting(null)}>
           <div>
             The dataset with its {deleting.entries} entr{deleting.entries === 1 ? "y" : "ies"} is deleted. The sources stay untouched. This cannot be undone.
           </div>
-          <ErrorLine error={remove.error} />
-          <div className="modal-actions">
-            <button onClick={() => setDeleting(null)}>Cancel</button>
-            <button className="danger" disabled={remove.isPending} onClick={() => remove.mutate(deleting.id)}>
-              Delete
-            </button>
-          </div>
-        </Modal>
+        </DeleteDialog>
       )}
       {creating && (
         <NewDataset

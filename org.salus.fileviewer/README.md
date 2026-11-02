@@ -8,6 +8,7 @@ One plugin, one backend, several viewers for files that other plugins open with 
 | `image` | png, jpg, jpeg, gif, webp, bmp, heic, heif | Pictures: Pillow decodes the file once and serves Deep Zoom tiles (pan, zoom to single pixels, navigator). The original file never reaches the browser. Transparency shows white, EXIF rotation is applied, animated GIF/WebP show the first frame, up to 120 megapixels. HEIC/HEIF (iPhone photos) is decoded by `pillow-heif` when installed (`backend/setup.sh` installs it), otherwise converted with macOS `sips` or libheif's `heif-convert`. |
 | `table` | csv, tsv, json, jsonl, ndjson, sqlite, sqlite3, db | Grid with paging, sorting, global and per-column filters. Files are loaded into a temporary SQLite database; SQLite files are opened read-only. **CSV and TSV can be edited** (see below). |
 | `pdf` | pdf | The server renders the pages (pypdfium2) and the viewer shows them as images with zoom. The PDF file itself never reaches the browser, and there is no download or print button. |
+| `text` | txt, log, md, geojson, topojson, ipynb, xml, kml, gpx, svg, html, yaml, toml, ini, cfg, py, js, ts, css, sh, r, sql, c, cpp, java, rs, go, … (see the manifest) | Read-only text with line numbers and syntax highlighting by [highlight.js](https://highlightjs.org) 11.11.1 (BSD-3-Clause, `frontend/vendor/highlight.min.js` with its 36 common languages). The language comes from the file type, or highlight.js guesses it from the text; the **Language** list changes it. JSON (GeoJSON …) can be shown **formatted**, with short arrays such as points kept on one line; minified files start formatted. **Wrap** breaks long lines. UTF-8, UTF-16 (with BOM) and Windows-1252 are read; binary files are refused; files over 8 MB show their first 8 MB, and over 2 MB of text is shown without colors. The colors follow Salus' light or dark theme. `json`, `csv` and `tsv` stay with the table viewer. |
 
 There is no entry component, so the plugin is not in the **+** list. Several viewers for one type would make Salus ask which to use; this plugin is the only one that should claim these types.
 
@@ -15,8 +16,8 @@ There is no entry component, so the plugin is not in the **+** list. Several vie
 
 ```
 manifest.toml
-backend/   plugin.py (routes), slides.py, pictures.py, tables.py, pdfs.py, errors.py, run.sh + setup.sh (virtualenv), salus_sdk.py
-frontend/  slide/, image/, table/, pdf/ (plain HTML + ES modules, no build step), vendor/ (OpenSeadragon), osd.js (shared viewer setup), salus_sdk.js
+backend/   plugin.py (routes), slides.py, pictures.py, tables.py, pdfs.py, texts.py, errors.py, run.sh + setup.sh (virtualenv), salus_sdk.py
+frontend/  slide/, image/, table/, pdf/, text/ (plain HTML + ES modules, no build step), vendor/ (OpenSeadragon, highlight.js), osd.js (shared viewer setup), salus_sdk.js
 ```
 
 ## Setup

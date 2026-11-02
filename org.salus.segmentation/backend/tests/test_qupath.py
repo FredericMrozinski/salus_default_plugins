@@ -67,7 +67,26 @@ class QuPathTest(unittest.TestCase):
 
     def test_only_matched_classes_are_imported(self):
         shapes = qupath.shapes_for(QUPATH, {"Tumor": self.tumor, "": self.other, "Stroma": None})
-        self.assertEqual(sorted(c for c, _ in shapes), [self.tumor, self.tumor, self.other])
+        self.assertEqual(sorted(c for c, _, _ in shapes), [self.tumor, self.tumor, self.other])
+
+    def test_names_survive_import_and_editing(self):
+        named = feature("Tumor")
+        named["properties"]["name"] = "  Region   A "
+        store = Annotations(self.project, "a.svs")
+        store.import_shapes(qupath.shapes_for([named, feature("Tumor")], {"Tumor": self.tumor}), replace=False)
+        self.assertEqual([s.name for s in store.shapes], ["Region A", None])
+        data = json.loads(store.file.read_text())
+        self.assertEqual(data["features"][0]["properties"]["name"], "Region A")  # where QuPath reads it
+        self.assertNotIn("name", data["features"][1]["properties"])
+        store.erase([[50, -10], [50, 110]], 5)  # cut, merged and reloaded shapes keep their names
+        store.add_area(store.shapes[1].geometry.buffer(1), self.tumor)
+        self.assertEqual([s.name for s in Annotations(self.project, "a.svs").shapes], ["Region A"])
+        self.assertTrue(store.rename(store.shapes[0].id, "B"))
+        self.assertEqual(store.shapes[0].name, "B")
+        store.undo()
+        self.assertEqual(store.shapes[0].name, "Region A")
+        store.rename(store.shapes[0].id, "  ")  # empty: the generic name again
+        self.assertIsNone(store.shapes[0].name)
 
     def test_merge_and_replace_are_one_undo_step(self):
         store = Annotations(self.project, "a.svs")

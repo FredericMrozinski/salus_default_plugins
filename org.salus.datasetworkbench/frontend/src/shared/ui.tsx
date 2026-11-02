@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { ReactNode, useEffect, useState } from "react";
+import { ReactNode, useState } from "react";
 import { api, encode } from "./salus";
 import { cellTone, CELL_STATE_LABEL, ENTRY_STATE_LABEL, message } from "./format";
 import { useDebounced, useDismiss } from "./hooks";
@@ -60,22 +60,41 @@ export function useTree() {
   return useQuery({ queryKey: ["tree"], queryFn: () => api<TreeNode[]>("GET", "/tree") });
 }
 
-/** A button that asks for confirmation inline before it acts. */
-export function ConfirmButton({ children, onConfirm, className, title }: { children: ReactNode; onConfirm: () => void; className?: string; title?: string }) {
-  const [asking, setAsking] = useState(false);
-  useEffect(() => {
-    if (!asking) return;
-    const t = setTimeout(() => setAsking(false), 4000);
-    return () => clearTimeout(t);
-  }, [asking]);
-  return asking ? (
-    <button className={`${className ?? ""} danger`} onClick={() => (setAsking(false), onConfirm())}>
-      Sure?
-    </button>
-  ) : (
-    <button className={className} title={title} onClick={() => setAsking(true)}>
+/** Deleting needs the word "delete" typed into a field, so that no stray click deletes data. Returns the field and
+ *  whether it holds the word. */
+export function useDeleteWord(label = "Type “delete” to confirm"): [ReactNode, boolean] {
+  const [text, setText] = useState("");
+  const field = (
+    <Field label={label}>
+      <input autoFocus value={text} placeholder="delete" autoComplete="off" spellCheck={false} onChange={(e) => setText(e.target.value)} />
+    </Field>
+  );
+  return [field, text.trim().toLowerCase() === "delete"];
+}
+
+/** A dialog that says what is lost and deletes only once "delete" is typed. */
+export function DeleteDialog({ title, children, action = "Delete", pending, error, onConfirm, onClose }: {
+  title: string;
+  children: ReactNode;
+  action?: string;
+  pending?: boolean;
+  error?: unknown;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  const [field, confirmed] = useDeleteWord();
+  return (
+    <Modal title={title} onClose={onClose}>
       {children}
-    </button>
+      {field}
+      <ErrorLine error={error} />
+      <div className="modal-actions">
+        <button onClick={onClose}>Cancel</button>
+        <button className="danger" disabled={!confirmed || pending} onClick={onConfirm}>
+          {action}
+        </button>
+      </div>
+    </Modal>
   );
 }
 

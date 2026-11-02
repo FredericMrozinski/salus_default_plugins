@@ -157,6 +157,16 @@ def remove_source(req):
     return None
 
 
+@route("POST", "/groups/convert")
+def convert_group(req):
+    """Turns a folder ({path}) into a general source cohort; the files in it become its items."""
+    source = wb.catalog.convert_group(body(req).get("path", ""))
+    wb.scan_source(source.id)  # adopts the files that are in the folder
+    notify({"type": "tree_changed"})
+    node = {"type": "source", "path": str(source.path.relative_to(wb.catalog.sources_dir)), **source.info()}
+    return salus.Response.json(node, status=201)
+
+
 @route("GET", "/groups/contents")
 def group_contents(req):
     path = req.query.get("path", "")

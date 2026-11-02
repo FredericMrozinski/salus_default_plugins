@@ -65,11 +65,30 @@ def parse_points(points) -> list[tuple[float, float]]:
     return out
 
 
-class Shape:
-    __slots__ = ("id", "class_id", "geometry")
+def check_name(name) -> str | None:
+    """A shape name: text up to 200 characters; empty (or not text) is no name."""
+    if not isinstance(name, str) or not name.strip():
+        return None
+    name = " ".join(name.split())
+    if len(name) > 200:
+        raise ViewerError("The name is too long.")
+    return name
 
-    def __init__(self, id: str, class_id: int, geometry: BaseGeometry):
-        self.id, self.class_id, self.geometry = id, class_id, geometry
+
+def brush_area(points, radius) -> BaseGeometry:
+    """The area a round brush of `radius` covers along a line of image pixels."""
+    points = parse_points(points)
+    if not points or not radius or radius <= 0:
+        raise ViewerError("Invalid brush stroke.")
+    return (Point(points[0]) if len(points) == 1 else LineString(points)).buffer(float(radius), quad_segs=8)
+
+
+class Shape:
+    __slots__ = ("id", "class_id", "geometry", "name")
+
+    def __init__(self, id: str, class_id: int, geometry: BaseGeometry, name: str | None = None):
+        # name: given by the user (or by QuPath, whose GeoJSON keeps it in properties.name); None shows a generic one
+        self.id, self.class_id, self.geometry, self.name = id, class_id, geometry, name
 
 
 class Annotations:
@@ -102,7 +121,7 @@ class Annotations:
             except (KeyError, TypeError, ValueError, AttributeError):
                 continue
             if geometry is not None and class_id is not None:
-                self.shapes.append(Shape(str(feature.get("id") or str(uuid.uuid4())), int(class_id), geometry))
+                self.shapes.append(Shape(str(feature.get("id") or str(uuid.uuid4())), int(class_id), geometry, check_name(props.get("name"))))
 
     def save(self) -> None:
         with self.lock:
@@ -116,6 +135,8 @@ class Annotations:
         for s in self.shapes:
             c = classes.get(s.class_id)
             props = {"objectType": "annotation", "class_id": s.class_id}
+            if s.name:
+                props["name"] = s.name  # where QuPath keeps the name of an annotation
             if c:
                 props["classification"] = {"name": c["name"], "color": hex_to_rgb(c["color"])}
             features.append({"type": "Feature", "id": s.id, "geometry": rounded(s.geometry), "properties": props})
@@ -153,42 +174,44 @@ class Annotations:
         if geometry is None or geometry.area < 1e-6:
             return None
         with self.lock:
-            merged, kept, first_id = [geometry], [], None
+            merged, kept, first = [geometry], [], None
             for s in self.shapes:
                 if s.class_id == class_id and s.geometry.intersects(geometry):
                     merged.append(s.geometry)
-                    first_id = first_id or s.id
+                    first = first or s
                 else:
                     kept.append(s)
             union = polygonal(make_valid(unary_union(merged)))
             if union is None:
                 return None
             self._checkpoint()
-            new = Shape(first_id or str(uuid.uuid4()), class_id, union)
+            # the merged shape keeps the id of the first one, and the first name among them
+            name = next((s.name for s in self.shapes if s.name and s.class_id == class_id and s.geometry.intersects(geometry)), None)
+            new = Shape(first.id if first else str(uuid.uuid4()), class_id, union, name)
             self.shapes = kept + [new]
             self.save()
             return new.id
 
-    def erase(self, points, radius: float) -> int:
-        """Cuts a brush stroke (a line of image pixels, `radius` wide on each side) out of every shape. Returns how many shapes changed."""
-        points = parse_points(points)
-        if not points or not radius or radius <= 0:
-            raise ViewerError("Invalid eraser stroke.")
-        brush = (Point(points[0]) if len(points) == 1 else LineString(points)).buffer(float(radius), quad_segs=8)
-        return self.erase_area(brush)
+    def paint(self, points, radius: float, class_id: int) -> str | None:
+        """Paints a brush stroke (a line of image pixels, `radius` wide on each side) with a class; see add_area."""
+        return self.add_area(brush_area(points, radius), class_id)
 
-    def erase_area(self, brush: BaseGeometry) -> int:
-        """Cuts an area out of every shape. Returns how many shapes changed."""
+    def erase(self, points, radius: float, skip=()) -> int:
+        """Cuts a brush stroke (a line of image pixels, `radius` wide on each side) out of every shape. Returns how many shapes changed."""
+        return self.erase_area(brush_area(points, radius), skip)
+
+    def erase_area(self, brush: BaseGeometry, skip=()) -> int:
+        """Cuts an area out of every shape but those of the classes in `skip` (the hidden ones). Returns how many shapes changed."""
         with self.lock:
             changed, result = 0, []
             for s in self.shapes:
-                if not s.geometry.intersects(brush):
+                if s.class_id in skip or not s.geometry.intersects(brush):
                     result.append(s)
                     continue
                 changed += 1
                 rest = polygonal(make_valid(s.geometry.difference(brush)))
                 if rest is not None:
-                    result.append(Shape(s.id, s.class_id, rest))
+                    result.append(Shape(s.id, s.class_id, rest, s.name))
             if changed:
                 self._checkpoint()
                 self.shapes = result
@@ -204,12 +227,26 @@ class Annotations:
             self.save()
             return True
 
-    def import_shapes(self, shapes: list[tuple[int, BaseGeometry]], replace: bool) -> int:
-        """Adds shapes (class id, geometry) read from another file, or replaces all shapes with them. One undo step."""
+    def rename(self, shape_id: str, name) -> bool:
+        """Names a shape; an empty name gives it back its generic one."""
+        name = check_name(name)
+        with self.lock:
+            target = next((s for s in self.shapes if s.id == shape_id), None)
+            if target is None:
+                raise ViewerError("No such shape.", 404)
+            if target.name == name:
+                return False
+            self._checkpoint()
+            self.shapes = [Shape(s.id, s.class_id, s.geometry, name) if s is target else s for s in self.shapes]
+            self.save()
+            return True
+
+    def import_shapes(self, shapes: list[tuple], replace: bool) -> int:
+        """Adds shapes (class id, geometry[, name]) read from another file, or replaces all shapes with them. One undo step."""
         with self.lock:
             self._checkpoint()
             kept = [] if replace else list(self.shapes)
-            self.shapes = kept + [Shape(str(uuid.uuid4()), class_id, geometry) for class_id, geometry in shapes]
+            self.shapes = kept + [Shape(str(uuid.uuid4()), s[0], s[1], s[2] if len(s) > 2 else None) for s in shapes]
             self.save()
             return len(shapes)
 
@@ -232,7 +269,10 @@ class Annotations:
             return True
 
     def summary(self) -> dict:
-        return {"shapes": len(self.shapes), "can_undo": bool(self.undo_stack), "can_redo": bool(self.redo_stack)}
+        classes: dict[str, int] = {}  # class id (as text, a JSON key) -> number of shapes
+        for s in self.shapes:
+            classes[str(s.class_id)] = classes.get(str(s.class_id), 0) + 1
+        return {"shapes": len(self.shapes), "classes": classes, "can_undo": bool(self.undo_stack), "can_redo": bool(self.redo_stack)}
 
 
 def count_shapes(file: Path) -> int:

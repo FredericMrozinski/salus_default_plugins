@@ -82,6 +82,30 @@ class CatalogTests(Base):
             self.wb.catalog.find_source(source.id)
 
 
+class ConvertTests(Base):
+    def test_folder_becomes_a_general_source_with_its_files(self):
+        self.wb.catalog.create_group("", "clinic")
+        self.wb.catalog.create_group("clinic", "wsi")
+        folder = self.wb.catalog.sources_dir / "clinic" / "wsi"
+        write(folder / "a.svs", b"a")
+        write(folder / "deep" / "b.svs", b"b")
+        source = self.wb.catalog.convert_group("clinic/wsi")
+        self.wb.scan_source(source.id)
+        self.assertEqual((source.kind, source.name, source.path), ("file", "wsi", folder))
+        self.assertEqual(source.info()["items"], 2)
+        self.assertEqual(self.wb.catalog.tree()[0]["children"][0]["type"], "source")
+        self.assertTrue((folder / "deep" / "b.svs").exists())  # nothing moved
+
+    def test_folders_with_or_in_sources_are_refused(self):
+        self.wb.catalog.create_group("", "outer")
+        self.wb.catalog.create_source("outer", "s", "file")
+        source = self.file_source("plain")
+        (source.path / "sub").mkdir()
+        for rel in ("outer", "outer/s", "plain/sub", "", "nope"):
+            with self.assertRaises(WorkbenchError, msg=rel):
+                self.wb.catalog.convert_group(rel)
+
+
 class MoveTests(Base):
     def test_move_source_between_groups_keeps_its_id_and_references(self):
         self.wb.catalog.create_group("", "a")

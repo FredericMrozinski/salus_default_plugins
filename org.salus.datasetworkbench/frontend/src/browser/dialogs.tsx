@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { api, encode } from "../shared/salus";
 import type { Column, Issue, SourceNode, TreeNode } from "../shared/types";
-import { ErrorLine, Field, Modal, Empty, useTree } from "../shared/ui";
+import { DeleteDialog, ErrorLine, Field, Modal, Empty, useDeleteWord, useTree } from "../shared/ui";
 
 export function NewGroupDialog({ parent, onClose }: { parent: string; onClose: () => void }) {
   const [name, setName] = useState("");
@@ -250,19 +250,12 @@ export function DeleteItemDialog({ source, path, folder, onClose }: { source: So
   });
   const name = path.split("/").pop();
   return (
-    <Modal title={`Delete “${name}”`} onClose={onClose}>
+    <DeleteDialog title={`Delete “${name}”`} action="Delete from disk" pending={remove.isPending} error={remove.error ?? usage.error} onConfirm={() => remove.mutate()} onClose={onClose}>
       <div>
         {folder ? "The folder and everything in it are" : "The file is"} deleted from disk. That cannot be undone.
       </div>
       <UsageNote usage={usage.data} what={folder ? "files in it" : "this file"} consequence="They will show “source missing”." />
-      <ErrorLine error={remove.error ?? usage.error} />
-      <div className="modal-actions">
-        <button onClick={onClose}>Cancel</button>
-        <button className="danger" disabled={remove.isPending} onClick={() => remove.mutate()}>
-          Delete from disk
-        </button>
-      </div>
-    </Modal>
+    </DeleteDialog>
   );
 }
 
@@ -277,20 +270,50 @@ export function RemoveSourceDialog({ source, onClose }: { source: SourceNode; on
   });
   const count = source.kind === "file" ? `${source.items ?? 0} file(s)` : "its CSV file";
   const usage = useQuery({ queryKey: ["usage", source.id, ""], queryFn: () => api<Usage>("GET", `/sources/${encode(source.id!)}/usage`), gcTime: 0 });
+  const [deleteField, deleteConfirmed] = useDeleteWord("Type “delete” to delete from disk");
   return (
     <Modal title={`Remove source “${source.name}”`} onClose={onClose}>
       <UsageNote usage={usage.data} what="this source" consequence="They will show “source missing” either way." />
       <div className="muted">
         <b>Remove only</b> forgets the source; the folder and {count} stay on disk. <b>Delete from disk</b> also deletes the folder with everything in it. That cannot be undone.
       </div>
+      {deleteField}
       <ErrorLine error={remove.error} />
       <div className="modal-actions">
         <button onClick={onClose}>Cancel</button>
         <button disabled={remove.isPending} onClick={() => remove.mutate(false)}>
           Remove only
         </button>
-        <button className="danger" disabled={remove.isPending} onClick={() => remove.mutate(true)}>
+        <button className="danger" disabled={!deleteConfirmed || remove.isPending} onClick={() => remove.mutate(true)}>
           Delete from disk
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+export function ConvertGroupDialog({ path, onClose, onConverted }: { path: string; onClose: () => void; onConverted: () => void }) {
+  const queryClient = useQueryClient();
+  const convert = useMutation({
+    mutationFn: () => api<SourceNode>("POST", "/groups/convert", { json: { path } }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["tree"] });
+      onConverted();
+      onClose();
+    },
+  });
+  const name = path.split("/").pop();
+  return (
+    <Modal title={`Convert “${name}” to a general source cohort`} onClose={onClose}>
+      <div>
+        The folder becomes a general source cohort called “{name}”. The files in it, in its subfolders too, become its items, so datasets can use them.
+      </div>
+      <div className="muted">Nothing is moved or deleted. Removing the source cohort later (“Remove only”) turns it back into a plain folder.</div>
+      <ErrorLine error={convert.error} />
+      <div className="modal-actions">
+        <button onClick={onClose}>Cancel</button>
+        <button className="primary" autoFocus disabled={convert.isPending} onClick={() => convert.mutate()}>
+          {convert.isPending ? "Converting…" : "Convert"}
         </button>
       </div>
     </Modal>
@@ -309,7 +332,7 @@ export function DeleteGroupDialog({ path, onClose }: { path: string; onClose: ()
   });
   const n = contents.data?.sources.length ?? 0;
   return (
-    <Modal title={`Delete folder “${path}”`} onClose={onClose}>
+    <DeleteDialog title={`Delete folder “${path}”`} action="Delete from disk" pending={!contents.data || remove.isPending} error={remove.error} onConfirm={() => remove.mutate()} onClose={onClose}>
       <ErrorLine error={contents.error} />
       {contents.isLoading && <Empty>Looking inside…</Empty>}
       {contents.data &&
@@ -321,14 +344,7 @@ export function DeleteGroupDialog({ path, onClose }: { path: string; onClose: ()
           </div>
         ))}
       {contents.data && !contents.data.empty && <UsageNote usage={contents.data.usage} what="these sources" consequence="They will show “source missing”." />}
-      <ErrorLine error={remove.error} />
-      <div className="modal-actions">
-        <button onClick={onClose}>Cancel</button>
-        <button className="danger" disabled={!contents.data || remove.isPending} onClick={() => remove.mutate()}>
-          Delete from disk
-        </button>
-      </div>
-    </Modal>
+    </DeleteDialog>
   );
 }
 

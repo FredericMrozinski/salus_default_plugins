@@ -478,11 +478,18 @@ function renderSaving() {
 
   async function confirmAndRun() {
     if (o.mode === "overwrite") {
+      // The originals are destroyed, so the word "delete" has to be typed first: no stray click can do it.
+      const replace = h("button", { class: "primary danger", disabled: true, onclick: () => (dialog = null, run()) }, "Replace the originals");
+      const word = h("input", { type: "text", placeholder: "delete", autocomplete: "off", spellcheck: false,
+        oninput: (e) => (replace.disabled = e.target.value.trim().toLowerCase() !== "delete"),
+        onkeydown: (e) => e.key === "Enter" && !replace.disabled && replace.click() });
       const el = h("div", { class: "backdrop" }, h("div", { class: "dialog" },
         h("header", {}, "Replace the original files?"),
-        h("div", { class: "content" }, h("p", {}, "The slides are overwritten with their new versions and the originals cannot be restored. Make sure you have a copy if the originals matter.")),
-        h("footer", {}, h("button", { onclick: closeDialog }, "Cancel"), h("button", { class: "primary danger", onclick: () => (dialog = null, run()) }, "Replace the originals"))));
+        h("div", { class: "content" }, h("p", {}, "The slides are overwritten with their new versions and the originals cannot be restored. Make sure you have a copy if the originals matter."),
+          h("label", { class: "form" }, h("span", {}, "Type ", h("strong", {}, "delete"), " to confirm"), word)),
+        h("footer", {}, h("button", { onclick: closeDialog }, "Cancel"), replace)));
       openDialog(el);
+      word.focus();
     } else run();
   }
 
