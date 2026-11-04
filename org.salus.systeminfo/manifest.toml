@@ -1,0 +1,22 @@
+[description]
+name = "System Info"
+developer = "Salus Organization"
+description = "Shows the hardware of the machine Salus runs on: memory, CPU and GPUs (NVIDIA with their memory; Apple Silicon with its unified memory and MPS)."
+contact = "frederic.mrozinski@tum.de"
+icon = "icon.svg"
+version = "0.1.0"
+
+[meta]
+api-version = 3
+entry-component = "main"
+
+# Nothing is kept between requests: the backend lives as long as the panel.
+[backend]
+entrypoint = "backend/run.sh"
+lifetime = "panel"
+
+[[frontend-component]]
+component-name = "main"
+title = "System Info"
+entrypoint = "frontend/main/index.html"
+target-panel = "center"

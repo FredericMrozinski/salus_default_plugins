@@ -1,0 +1,289 @@
+"""What hardware the machine has that this backend runs on: memory, CPU and GPUs.
+
+Everything is read on each call (available memory changes). External tools (`nvidia-smi`, `sysctl`, `system_profiler`)
+are called through `run`, so the tests can stand in for them; a tool that is missing or fails just gives nothing.
+PyTorch is used when it can be imported, but it is not a dependency: without it, NVIDIA GPUs come from `nvidia-smi`
+and MPS support is inferred from the machine and macOS version.
+"""
+from __future__ import annotations
+
+import importlib.util
+import json
+import logging
+import os
+import platform
+import shutil
+import socket
+import subprocess
+import sys
+from collections.abc import Callable
+from typing import Optional
+
+import psutil
+
+log = logging.getLogger("systeminfo")
+
+Runner = Callable[[list[str]], Optional[str]]
+
+MIB = 1024 * 1024
+
+
+def run_command(args: list[str], timeout: float = 10) -> str | None:
+    """stdout of a command, or None if it is not installed, fails or takes too long."""
+    if shutil.which(args[0]) is None:
+        return None
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False)
+    except (OSError, subprocess.SubprocessError) as e:
+        log.info("%s failed: %s", args[0], e)
+        return None
+    if result.returncode != 0:
+        log.info("%s exited with %s: %s", args[0], result.returncode, result.stderr.strip())
+        return None
+    return result.stdout
+
+
+def is_apple_silicon(system: str | None = None, machine: str | None = None) -> bool:
+    return (system or platform.system()) == "Darwin" and (machine or platform.machine()) == "arm64"
+
+
+# --------------------------------------------------------------------------- memory and CPU
+
+def memory() -> dict:
+    vm = psutil.virtual_memory()
+    return {"total": vm.total, "available": vm.available, "used_percent": vm.percent}
+
+
+def cpu_model(run: Runner = run_command, system: str | None = None) -> str | None:
+    system = system or platform.system()
+    if system == "Darwin":
+        name = (run(["sysctl", "-n", "machdep.cpu.brand_string"]) or "").strip()
+        if name:
+            return name
+    elif system == "Linux":
+        try:
+            with open("/proc/cpuinfo", encoding="utf-8", errors="replace") as f:
+                name = parse_proc_cpuinfo(f.read())
+            if name:
+                return name
+        except OSError:
+            pass
+    return platform.processor() or None
+
+
+def parse_proc_cpuinfo(text: str) -> str | None:
+    """The CPU name in /proc/cpuinfo: `model name` on x86, `Model`/`Hardware` on some ARM boards."""
+    fields = {}
+    for line in text.splitlines():
+        key, sep, value = line.partition(":")
+        if sep and value.strip():
+            fields.setdefault(key.strip().lower(), value.strip())
+    return fields.get("model name") or fields.get("model") or fields.get("hardware")
+
+
+def apple_core_kinds(run: Runner = run_command) -> dict:
+    """Performance and efficiency cores of Apple Silicon (`hw.perflevel0/1.physicalcpu`); empty elsewhere."""
+    kinds = {}
+    for level, key in ((0, "performance_cores"), (1, "efficiency_cores")):
+        value = (run(["sysctl", "-n", f"hw.perflevel{level}.physicalcpu"]) or "").strip()
+        if value.isdigit():
+            kinds[key] = int(value)
+    return kinds
+
+
+def cpu(run: Runner = run_command) -> dict:
+    info = {
+        "model": cpu_model(run),
+        "architecture": platform.machine() or None,
+        "physical_cores": psutil.cpu_count(logical=False),
+        "logical_cores": psutil.cpu_count(logical=True),
+    }
+    if is_apple_silicon():
+        info.update(apple_core_kinds(run))
+    return info
+
+
+# --------------------------------------------------------------------------- GPUs
+
+NVIDIA_SMI_QUERY = ["nvidia-smi", "--query-gpu=index,name,memory.total,memory.used,memory.free,driver_version",
+                    "--format=csv,noheader,nounits"]
+
+
+def _mib(value: str) -> int | None:
+    try:
+        return int(float(value) * MIB)
+    except ValueError:  # "[N/A]", "[Not Supported]"
+        return None
+
+
+def parse_nvidia_smi(text: str) -> list[dict]:
+    gpus = []
+    for line in text.splitlines():
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) < 6:
+            continue
+        index, name, total, used, free, driver = parts[:6]
+        gpus.append({
+            "vendor": "NVIDIA", "name": name, "index": int(index) if index.isdigit() else None,
+            "memory_total": _mib(total), "memory_used": _mib(used), "memory_free": _mib(free),
+            "unified_memory": False, "driver": driver or None, "source": "nvidia-smi",
+        })
+    return gpus
+
+
+def torch_spec_present() -> bool:
+    return importlib.util.find_spec("torch") is not None
+
+
+def cuda_gpus_from_torch() -> list[dict]:
+    try:
+        import torch
+    except Exception:  # noqa: BLE001 - a broken install is the same as none
+        return []
+    try:
+        if not torch.cuda.is_available():
+            return []
+        gpus = []
+        for index in range(torch.cuda.device_count()):
+            props = torch.cuda.get_device_properties(index)
+            free = total = None
+            try:
+                free, total = torch.cuda.mem_get_info(index)
+            except Exception:  # noqa: BLE001
+                total = props.total_memory
+            gpus.append({
+                "vendor": "NVIDIA", "name": props.name, "index": index, "memory_total": total,
+                "memory_used": total - free if free is not None and total is not None else None, "memory_free": free,
+                "unified_memory": False, "driver": None, "source": "PyTorch",
+            })
+        return gpus
+    except Exception as e:  # noqa: BLE001
+        log.info("torch.cuda failed: %s", e)
+        return []
+
+
+def nvidia_gpus(run: Runner = run_command, torch_present: Callable[[], bool] = torch_spec_present) -> list[dict]:
+    output = run(NVIDIA_SMI_QUERY)
+    if output:
+        gpus = parse_nvidia_smi(output)
+        if gpus:
+            return gpus
+    return cuda_gpus_from_torch() if torch_present() else []
+
+
+def parse_system_profiler(text: str) -> list[dict]:
+    """The GPUs in `system_profiler SPDisplaysDataType -json`."""
+    try:
+        entries = json.loads(text).get("SPDisplaysDataType", [])
+    except (ValueError, AttributeError):
+        return []
+    gpus = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("sppci_model") or entry.get("_name")
+        if not name:
+            continue
+        cores = entry.get("sppci_cores")
+        gpus.append({
+            "name": name,
+            "vendor": (entry.get("spdisplays_vendor") or "").replace("sppci_vendor_", "") or None,
+            "cores": int(cores) if isinstance(cores, str) and cores.isdigit() else cores if isinstance(cores, int) else None,
+            "vram": parse_vram(entry.get("spdisplays_vram") or entry.get("spdisplays_vram_shared")),
+            "metal": metal_name(entry.get("spdisplays_mtlgpufamilysupport") or entry.get("spdisplays_metal")),
+        })
+    return gpus
+
+
+def metal_name(value) -> str | None:
+    """`"spdisplays_metal4"` as `"Metal 4"`."""
+    if not isinstance(value, str) or not value:
+        return None
+    suffix = value.removeprefix("spdisplays_").removeprefix("metal")
+    return f"Metal {suffix}".strip() if suffix != value else value
+
+
+def parse_vram(text) -> int | None:
+    """`"8 GB"` or `"1536 MB"` in bytes."""
+    if not isinstance(text, str):
+        return None
+    parts = text.split()
+    if len(parts) != 2:
+        return None
+    number, unit = parts
+    factor = {"MB": MIB, "GB": 1024 * MIB, "TB": 1024 * 1024 * MIB}.get(unit.upper())
+    try:
+        return int(float(number) * factor) if factor else None
+    except ValueError:
+        return None
+
+
+def macos_version_tuple(version: str | None = None) -> tuple[int, ...]:
+    version = version if version is not None else platform.mac_ver()[0]
+    try:
+        return tuple(int(part) for part in version.split(".") if part)
+    except ValueError:
+        return ()
+
+
+def mps_status(torch_present: Callable[[], bool] = torch_spec_present, mac_version: str | None = None) -> dict:
+    """Whether PyTorch can use the Apple GPU (Metal Performance Shaders). Asked from PyTorch when it is installed here."""
+    if torch_present():
+        try:
+            import torch
+            return {"available": bool(torch.backends.mps.is_available()), "built": bool(torch.backends.mps.is_built()),
+                    "source": "PyTorch " + torch.__version__}
+        except Exception as e:  # noqa: BLE001
+            log.info("torch.backends.mps failed: %s", e)
+    supported = macos_version_tuple(mac_version) >= (12, 3)
+    return {"available": supported, "built": None, "source": "macOS " + (mac_version or platform.mac_ver()[0])
+            + " (PyTorch is not installed in this plugin's environment; MPS needs macOS 12.3 or later)"}
+
+
+def apple_gpus(run: Runner = run_command, total_memory: int | None = None,
+               torch_present: Callable[[], bool] = torch_spec_present, mac_version: str | None = None) -> list[dict]:
+    """The Apple Silicon GPU: it has no memory of its own but shares the unified memory with the CPU."""
+    chip = (run(["sysctl", "-n", "machdep.cpu.brand_string"]) or "").strip() or "Apple Silicon"
+    profiled = parse_system_profiler(run(["system_profiler", "SPDisplaysDataType", "-json"]) or "")
+    apple = next((gpu for gpu in profiled if "apple" in gpu["name"].lower() or gpu.get("vendor") == "apple"), None)
+    return [{
+        "vendor": "Apple", "name": apple["name"] if apple else chip, "chip": chip,
+        "cores": apple.get("cores") if apple else None, "metal": apple.get("metal") if apple else None,
+        "memory_total": total_memory, "memory_used": None, "memory_free": None, "unified_memory": True,
+        "mps": mps_status(torch_present, mac_version), "source": "system_profiler" if apple else "sysctl",
+    }]
+
+
+def other_mac_gpus(run: Runner = run_command) -> list[dict]:
+    """GPUs of an Intel Mac (system_profiler)."""
+    return [{
+        "vendor": gpu.get("vendor"), "name": gpu["name"], "memory_total": gpu.get("vram"), "memory_used": None,
+        "memory_free": None, "unified_memory": False, "source": "system_profiler",
+    } for gpu in parse_system_profiler(run(["system_profiler", "SPDisplaysDataType", "-json"]) or "")]
+
+
+def gpus(run: Runner = run_command, system: str | None = None, machine: str | None = None,
+         torch_present: Callable[[], bool] = torch_spec_present, total_memory: int | None = None) -> list[dict]:
+    system = system or platform.system()
+    if is_apple_silicon(system, machine):
+        return apple_gpus(run, total_memory, torch_present)
+    found = nvidia_gpus(run, torch_present)
+    if not found and system == "Darwin":
+        found = other_mac_gpus(run)
+    return found
+
+
+# --------------------------------------------------------------------------- all of it
+
+def collect(run: Runner = run_command) -> dict:
+    mem = memory()
+    return {
+        "host": socket.gethostname(),
+        "os": {"system": platform.system(), "release": platform.release(),
+               "version": platform.mac_ver()[0] if platform.system() == "Darwin" else platform.version()},
+        "python": sys.version.split()[0],
+        "pid": os.getpid(),
+        "memory": mem,
+        "cpu": cpu(run),
+        "gpus": gpus(run, total_memory=mem["total"]),
+    }

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 960 960" fill="none" stroke="#5b8def" stroke-width="40" stroke-linecap="round" stroke-linejoin="round">
+  <!-- a chip with its pins -->
+  <rect x="250" y="250" width="460" height="460" rx="50"/>
+  <rect x="370" y="370" width="220" height="220" rx="20"/>
+  <path d="M370 250V140M480 250V140M590 250V140M370 820V710M480 820V710M590 820V710M250 370H140M250 480H140M250 590H140M820 370H710M820 480H710M820 590H710"/>
+</svg>

@@ -70,7 +70,7 @@ function renderSetting(setting, path, state) {
   const error = el("div", { className: "error", hidden: true });
   const saved = el("span", { className: "saved", hidden: true, textContent: "Saved" });
   const reset = el("button", { type: "button", textContent: "Reset", title: "Back to the default" });
-  const control = makeControl(setting, id, state.values[setting.key]);
+  const control = setting.type === "plugin-list" ? pluginListControl(id) : makeControl(setting, id, state.values[setting.key]);
 
   const refresh = () => {
     reset.hidden = !state.stored.has(setting.key);
@@ -102,9 +102,10 @@ function renderSetting(setting, path, state) {
 
   const hints = [];
   if (setting.min !== undefined || setting.max !== undefined) hints.push(`${setting.min ?? "…"} to ${setting.max ?? "…"}`);
-  if ("default" in setting && setting.default !== "") hints.push(`default: ${setting.default}`);
+  if ("default" in setting && setting.default !== "" && !(Array.isArray(setting.default) && setting.default.length === 0)) hints.push(`default: ${setting.default}`);
   if (setting.type === "file-path") hints.push("path of a file on the server");
   if (setting.type === "directory-path") hints.push("path of a folder on the server");
+  if (setting.type === "plugin-list") hints.push("plugin identifiers (folder names); plugins that are not installed are skipped");
 
   const node = el("section", { className: "setting" },
     el("div", { className: "head" }, el("label", { htmlFor: id, textContent: setting.name }), el("span", { className: "key", textContent: setting.key })),
@@ -134,13 +135,77 @@ function makeControl(setting, id) {
   }
 }
 
+// ---------------------------------------------------------------------------------------------- plugin lists
+// A plugin-list setting is edited as a list: one row per plugin (with its name, or a warning if it is not installed),
+// buttons to move or remove it, and a field to add one (suggesting the installed plugins). Every change is saved at once:
+// the control fires "change" and `readControl` gives the whole list.
+
+const installedPlugins = () => targets.filter((target) => target.kind === "plugin");
+
+function pluginListControl(id) {
+  const control = el("div", { className: "plugin-list" });
+  control.list = [];
+  const changed = (list) => {
+    control.list = list;
+    control.dispatchEvent(new Event("change"));
+  };
+
+  const datalist = el("datalist", { id: `${id}-plugins` });
+  const input = el("input", { id, type: "text", spellcheck: false, className: "path", placeholder: "org.example.plugin" });
+  input.setAttribute("list", datalist.id);
+  input.setAttribute("autocapitalize", "off");
+  const add = el("button", { type: "button", textContent: "Add" });
+  const addTyped = () => {
+    const identifier = input.value.trim();
+    if (!identifier) return;
+    input.value = "";
+    if (!control.list.includes(identifier)) changed([...control.list, identifier]);
+  };
+  add.addEventListener("click", addTyped);
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") addTyped();
+  });
+  input.addEventListener("change", (event) => event.stopPropagation()); // typing is not a change of the list
+
+  const rows = el("ol", { className: "plugin-rows" });
+  control.render = () => {
+    const known = new Map(installedPlugins().map((plugin) => [plugin.id, plugin.name]));
+    datalist.replaceChildren(...[...known].filter(([pluginId]) => !control.list.includes(pluginId))
+      .map(([pluginId, name]) => el("option", { value: pluginId, textContent: name })));
+    rows.replaceChildren(...control.list.map((pluginId, index) => {
+      const move = (by) => {
+        const list = [...control.list];
+        [list[index], list[index + by]] = [list[index + by], list[index]];
+        changed(list);
+      };
+      const up = el("button", { type: "button", textContent: "↑", title: "Earlier", disabled: index === 0 });
+      const down = el("button", { type: "button", textContent: "↓", title: "Later", disabled: index === control.list.length - 1 });
+      const remove = el("button", { type: "button", textContent: "Remove", title: "Take it off the list (the plugin stays installed)" });
+      up.addEventListener("click", () => move(-1));
+      down.addEventListener("click", () => move(1));
+      remove.addEventListener("click", () => changed(control.list.filter((_, i) => i !== index)));
+      const name = known.has(pluginId)
+        ? el("span", { className: "plugin-name", textContent: known.get(pluginId) })
+        : el("span", { className: "plugin-name missing", textContent: "not installed: skipped" });
+      return el("li", {}, el("div", { className: "plugin-text" }, el("span", { className: "plugin-id", textContent: pluginId, title: pluginId }), name), up, down, remove);
+    }));
+    rows.hidden = control.list.length === 0;
+  };
+  control.append(rows, el("div", { className: "plugin-add" }, input, add, datalist));
+  return control;
+}
+
 function setControlValue(setting, control, value) {
-  if (setting.type === "bool") control.checked = value === true;
+  if (setting.type === "plugin-list") {
+    control.list = Array.isArray(value) ? [...value] : [];
+    control.render();
+  } else if (setting.type === "bool") control.checked = value === true;
   else control.value = value === undefined ? "" : String(value);
 }
 
 /** The value in the control: `undefined` for an empty number field, `NaN` for text that is not a number. */
 function readControl(setting, control) {
+  if (setting.type === "plugin-list") return control.list;
   if (setting.type === "bool") return control.checked;
   if (setting.type === "int" || setting.type === "float") return control.value.trim() === "" ? undefined : Number(control.value);
   return control.value;
