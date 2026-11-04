@@ -15,3 +15,5 @@ dd { margin: 0; overflow-wrap: anywhere; }
 .bar.high > div { background: var(--salus-danger, #ff6369); }
 .yes { color: var(--salus-success, #3fb950); }
 .no { color: var(--salus-fg-muted, #a9adba); }
+.capped { color: var(--salus-warning, #f5a524); font-size: 12px; margin: -2px 0 6px; }
+.note { margin: 8px 0 0; font-size: 12px; }

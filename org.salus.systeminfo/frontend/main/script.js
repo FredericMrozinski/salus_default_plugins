@@ -26,21 +26,58 @@ function bar(used, total) {
   return h("div", { class: share > 0.9 ? "bar high" : "bar", title: `${Math.round(share * 100)} % used` }, h("div", { style: `width: ${share * 100}%` }));
 }
 
+// The big numbers are what the backend can use; where a container caps it, the machine's values follow below.
+const capped = (text) => h("div", { class: "capped" }, text);
+const cores = (n) => (Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/0+$/, ""));
+
 function memoryCard(memory) {
   const used = memory.total - memory.available;
+  const limit = memory.limit;
   return h("section", { class: "card" },
     h("h2", {}, "Memory (RAM)"),
     h("div", { class: "big" }, bytes(memory.total)),
+    limit && limit.limit < memory.machine_total ? capped(`Capped by the container (${limit.source} memory limit)`) : null,
     bar(used, memory.total),
-    rows([["Available", bytes(memory.available)], ["In use", `${bytes(used)} (${Math.round(memory.used_percent)} %)`]]));
+    rows([
+      ["Available", bytes(memory.available)],
+      ["In use", `${bytes(used)} (${Math.round(memory.used_percent)} %)`],
+      ...(limit ? [["Machine", `${bytes(memory.machine_total)} total, ${bytes(memory.machine_available)} available`]] : []),
+    ]));
 }
 
 function cpuCard(cpu) {
   const kinds = cpu.performance_cores !== undefined ? `${cpu.performance_cores} performance, ${cpu.efficiency_cores ?? 0} efficiency` : null;
+  const effective = cpu.effective ?? {};
+  const limitedBy = { quota: `the container's CPU quota (${effective.quota?.source})`, cpuset: "the CPUs it may run on (cpuset)" }[effective.limited_by];
   return h("section", { class: "card" },
     h("h2", {}, "CPU"),
     h("div", { class: "big" }, cpu.model ?? "Unknown CPU"),
-    rows([["Physical cores", cpu.physical_cores ?? "unknown"], ["Logical cores", cpu.logical_cores ?? "unknown"], ["Core types", kinds], ["Architecture", cpu.architecture]]));
+    limitedBy ? capped(`Usable: ${cores(effective.cores)} of ${cpu.logical_cores} cores, capped by ${limitedBy}`) : null,
+    rows([
+      ...(limitedBy ? [["Usable cores", cores(effective.cores)]] : []),
+      [limitedBy ? "Machine: physical" : "Physical cores", cpu.physical_cores ?? "unknown"],
+      [limitedBy ? "Machine: logical" : "Logical cores", cpu.logical_cores ?? "unknown"],
+      ["Core types", kinds],
+      ...(effective.cpuset !== null && effective.cpuset !== undefined && effective.limited_by !== "cpuset" && effective.cpuset < cpu.logical_cores ? [["CPU set", `${effective.cpuset} cores`]] : []),
+      ...(effective.quota && effective.limited_by !== "quota" ? [["CPU quota", `${cores(effective.quota.cores)} cores`]] : []),
+      ["Architecture", cpu.architecture],
+    ]));
+}
+
+function environmentCard(environment) {
+  if (!environment) return null;
+  const { container, virtual_machine: vm, cgroup } = environment;
+  const where = container && vm ? `${container.kind} container in a ${vm.kind} VM` : container ? `${container.kind} container` : vm ? `${vm.kind} virtual machine` : "Directly on the machine";
+  return h("section", { class: "card" },
+    h("h2", {}, "Runs in"),
+    h("div", { class: "big" }, where),
+    rows([
+      ["Container", container ? `${container.kind} (${container.evidence})` : "none found"],
+      ["Virtual machine", vm ? `${vm.kind} (${vm.evidence})` : "none found"],
+      ["cgroup", cgroup ? `v${cgroup}` : null],
+    ]),
+    vm ? h("p", { class: "faint note" }, "In a VM, memory and CPUs are the VM's share already.") : null,
+    container ? h("p", { class: "faint note" }, "A container gets whole GPUs: their memory is not capped (a MIG or vGPU partition shows its own size).") : null);
 }
 
 function yesNo(value, yes = "yes", no = "no") {
@@ -67,7 +104,8 @@ function gpuCard(gpu) {
       ...mps,
       ["Read with", gpu.source],
     ]),
-    gpu.mps?.source ? h("p", { class: "faint", style: "margin: 8px 0 0; font-size: 12px" }, `MPS: ${gpu.mps.source}`) : null);
+    gpu.visible_by ? h("p", { class: "faint note" }, "Only the GPUs CUDA_VISIBLE_DEVICES leaves visible are shown.") : null,
+    gpu.mps?.source ? h("p", { class: "faint note" }, `MPS: ${gpu.mps.source}`) : null);
 }
 
 function render() {
@@ -85,8 +123,8 @@ function render() {
     : [h("section", { class: "card" }, h("h2", {}, "GPU"), h("div", { class: "faint" }, "No GPU found (no NVIDIA GPU via nvidia-smi or PyTorch, no Apple Silicon)."))];
   app.replaceChildren(...[header,
     error ? h("p", { class: "error" }, error) : null,
-    h("div", { class: "cards" }, memoryCard(info.memory), cpuCard(info.cpu), ...gpus),
-    h("p", { class: "faint", style: "margin-top: 14px; font-size: 12px" }, "The machine the Salus server runs on, not the device this page is shown on.")].filter(Boolean));
+    h("div", { class: "cards" }, memoryCard(info.memory), cpuCard(info.cpu), ...gpus, environmentCard(info.environment)),
+    h("p", { class: "faint", style: "margin-top: 14px; font-size: 12px" }, "What the Salus server's plugin backend can use (in a container: its share), not the device this page is shown on.")].filter(Boolean));
 }
 
 async function load() {

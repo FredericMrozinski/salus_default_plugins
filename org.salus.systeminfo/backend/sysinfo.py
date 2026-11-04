@@ -17,9 +17,12 @@ import socket
 import subprocess
 import sys
 from collections.abc import Callable
+from pathlib import Path
 from typing import Optional
 
 import psutil
+
+import limits
 
 log = logging.getLogger("systeminfo")
 
@@ -49,9 +52,22 @@ def is_apple_silicon(system: str | None = None, machine: str | None = None) -> b
 
 # --------------------------------------------------------------------------- memory and CPU
 
-def memory() -> dict:
+def memory(root: Path = Path("/")) -> dict:
+    """`total` and `available` are what this process can use: the machine's (in a VM the VM's), or less where a container's
+    cgroup caps it (`limit` says so). `machine_total` / `machine_available` are what the OS reports."""
     vm = psutil.virtual_memory()
-    return {"total": vm.total, "available": vm.available, "used_percent": vm.percent}
+    info = {"total": vm.total, "available": vm.available, "used_percent": vm.percent,
+            "machine_total": vm.total, "machine_available": vm.available, "limit": None}
+    cap = limits.memory_limit(root)
+    if cap and cap["limit"] < vm.total:
+        info["total"] = cap["limit"]
+        info["available"] = min(cap["available"], vm.available)
+        info["used_percent"] = round(100 * (1 - info["available"] / cap["limit"]), 1) if cap["limit"] else 100.0
+        info["limit"] = cap
+    elif cap and cap["available"] < vm.available:  # a cap above the machine's memory that is nearly used up
+        info["available"] = cap["available"]
+        info["limit"] = cap
+    return info
 
 
 def cpu_model(run: Runner = run_command, system: str | None = None) -> str | None:
@@ -91,12 +107,16 @@ def apple_core_kinds(run: Runner = run_command) -> dict:
     return kinds
 
 
-def cpu(run: Runner = run_command) -> dict:
+def cpu(run: Runner = run_command, root: Path = Path("/")) -> dict:
+    """The machine's cores, and `effective`: how many CPUs' worth of time this process can get (a container's CPU quota or
+    cpuset can make that fewer, and a quota can be a fraction such as 1.5)."""
+    logical = psutil.cpu_count(logical=True)
     info = {
         "model": cpu_model(run),
         "architecture": platform.machine() or None,
         "physical_cores": psutil.cpu_count(logical=False),
-        "logical_cores": psutil.cpu_count(logical=True),
+        "logical_cores": logical,
+        "effective": limits.effective_cpus(logical, root),
     }
     if is_apple_silicon():
         info.update(apple_core_kinds(run))
@@ -105,7 +125,7 @@ def cpu(run: Runner = run_command) -> dict:
 
 # --------------------------------------------------------------------------- GPUs
 
-NVIDIA_SMI_QUERY = ["nvidia-smi", "--query-gpu=index,name,memory.total,memory.used,memory.free,driver_version",
+NVIDIA_SMI_QUERY = ["nvidia-smi", "--query-gpu=index,name,memory.total,memory.used,memory.free,driver_version,uuid",
                     "--format=csv,noheader,nounits"]
 
 
@@ -126,9 +146,30 @@ def parse_nvidia_smi(text: str) -> list[dict]:
         gpus.append({
             "vendor": "NVIDIA", "name": name, "index": int(index) if index.isdigit() else None,
             "memory_total": _mib(total), "memory_used": _mib(used), "memory_free": _mib(free),
-            "unified_memory": False, "driver": driver or None, "source": "nvidia-smi",
+            "unified_memory": False, "driver": driver or None, "uuid": parts[6] if len(parts) > 6 and parts[6] else None,
+            "source": "nvidia-smi",
         })
     return gpus
+
+
+def visible_gpus(gpus: list[dict], environ: dict | None = None) -> list[dict]:
+    """The GPUs CUDA programs of this process may use: `CUDA_VISIBLE_DEVICES` (indices or UUIDs, as CUDA reads it: up to
+    the first entry that matches nothing) narrows what nvidia-smi lists. A container given only some GPUs (`--gpus`)
+    shows only those to nvidia-smi already."""
+    environ = os.environ if environ is None else environ
+    value = environ.get("CUDA_VISIBLE_DEVICES")
+    if value is None:
+        return gpus
+    chosen = []
+    for entry in (part.strip() for part in value.split(",")):
+        match = next((gpu for gpu in gpus if (entry.isdigit() and gpu.get("index") == int(entry))
+                      or (entry and gpu.get("uuid") and gpu["uuid"].startswith(entry if entry.startswith("GPU-") else "GPU-" + entry))), None)
+        if match is None or match in chosen:
+            break
+        chosen.append(match)
+    for gpu in chosen:
+        gpu["visible_by"] = "CUDA_VISIBLE_DEVICES"
+    return chosen
 
 
 def torch_spec_present() -> bool:
@@ -167,7 +208,7 @@ def nvidia_gpus(run: Runner = run_command, torch_present: Callable[[], bool] = t
     if output:
         gpus = parse_nvidia_smi(output)
         if gpus:
-            return gpus
+            return visible_gpus(gpus)
     return cuda_gpus_from_torch() if torch_present() else []
 
 
@@ -275,9 +316,19 @@ def gpus(run: Runner = run_command, system: str | None = None, machine: str | No
 
 # --------------------------------------------------------------------------- all of it
 
+def environment(run: Runner = run_command, root: Path = Path("/")) -> dict:
+    """Whether this backend runs in a container and/or a VM, and which cgroup version caps it."""
+    return {
+        "container": limits.container(root),
+        "virtual_machine": limits.virtual_machine(run, root),
+        "cgroup": limits.cgroup_version(root) if platform.system() == "Linux" else None,
+    }
+
+
 def collect(run: Runner = run_command) -> dict:
     mem = memory()
     return {
+        "environment": environment(run),
         "host": socket.gethostname(),
         "os": {"system": platform.system(), "release": platform.release(),
                "version": platform.mac_ver()[0] if platform.system() == "Darwin" else platform.version()},

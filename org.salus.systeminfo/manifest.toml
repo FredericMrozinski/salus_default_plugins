@@ -1,10 +1,10 @@
 [description]
 name = "System Info"
 developer = "Salus Organization"
-description = "Shows the hardware of the machine Salus runs on: memory, CPU and GPUs (NVIDIA with their memory; Apple Silicon with its unified memory and MPS)."
+description = "Shows what the Salus backend can use: memory, CPU and GPUs (NVIDIA with their memory; Apple Silicon with its unified memory and MPS), capped as a container or VM allows."
 contact = "frederic.mrozinski@tum.de"
 icon = "icon.svg"
-version = "0.1.0"
+version = "0.2.0"
 
 [meta]
 api-version = 3
