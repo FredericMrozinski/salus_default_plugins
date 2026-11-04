@@ -90,7 +90,7 @@ const modesOf = (state) => state.modes ?? BUILT_IN;
 // Border Growth only: how strict the colours away from the brush are (backend/borderbrush.py, `strict_profile`).
 const SENSITIVITIES = [
   { id: "normal", name: "Normal", about: "Colors: as close to the inner circle's as before, also some way beyond it" },
-  { id: "strict", name: "Strict", about: "Colors: beyond the inner circle only very close ones; less leaking, the area stays nearer to the brush" },
+  { id: "strict", name: "Strict", about: "Colors: only close ones in the inner circle and very close ones beyond it; less leaking, the area stays nearer to the brush" },
 ];
 
 function sensitivitySwitch(state) {

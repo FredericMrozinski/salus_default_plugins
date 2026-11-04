@@ -111,12 +111,13 @@ In a smart mode:
   all four sides are filled (`sb.fill_gaps`).
 
   **Colors: Normal / Strict** (a switch in the tools panel, shown in Border Growth; shared state `sensitivity`, kept while
-  the plugin runs, read when a stroke starts). *Normal* is the brush as described above. *Strict* allows fewer colours away
-  from the brush, for less leaking into neighbouring tissue: inside the inner circle the colour limit is the same (18), beyond
-  its rim it falls as a Gaussian of the distance, sigma half the inner radius (at least 8 px), down to 3 (`strict_profile`,
-  `STRICT_FAR`, `STRICT_SIGMA`, `MIN_STRICT_SIGMA`). With the default brush (inner radius 16): 12 at 8 px beyond the rim, 5 at
-  16 px, 3.7 at 20 px, where Normal still allows 18 (and 5 only 60 px further out). The neighbour steps are the same in both.
-  On a slowly changing colour (no edge), a dab grows 60 px from the centre with Normal and 35 px with Strict.
+  the plugin runs, read when a stroke starts). *Normal* is the brush as described above. *Strict* allows fewer colours, for
+  less leaking into neighbouring tissue: 14 inside the inner circle (Normal: 18), and beyond its rim the limit falls as a
+  Gaussian of the distance, sigma a third of the inner radius (at least 5 px), down to 2 (`strict_profile`, `STRICT_NEAR`,
+  `STRICT_FAR`, `STRICT_SIGMA`, `MIN_STRICT_SIGMA`). With the default brush (inner radius 16): 11.1 at 4 px beyond the rim,
+  5.9 at 8 px, 4.1 at 10 px, 2.1 at 16 px, where Normal still allows 18 (and 5 only 60 px further out). The neighbour
+  steps are the same in both. On a slowly changing colour (no edge), a dab grows 60 px from the centre with Normal and
+  28 px with Strict; on a cell-rich TCGA slide the same stroke paints 15 to 45 % less than with Normal.
 
   **Snapping to edges** (setting *Border growth: snap to edges*, `border_snap`, on by default). The growth compares colours
   blurred with sigma 5 px (so that noise and texture do not stop it), which turns an edge into a ramp about 10 px wide on

@@ -462,9 +462,10 @@ class StrictColoursTest(unittest.TestCase):
         inner = 16
         sigma = max(bb.MIN_STRICT_SIGMA, bb.STRICT_SIGMA * inner)
         at = lambda d: float(bb.strict_profile(np.array(float(d)), inner))  # noqa: E731
-        self.assertEqual(at(0), bb.THRESHOLD_NEAR)
-        self.assertEqual(at(inner), bb.THRESHOLD_NEAR)  # unchanged inside the inner circle
-        self.assertAlmostEqual(at(inner + sigma), bb.STRICT_FAR + (bb.THRESHOLD_NEAR - bb.STRICT_FAR) * np.exp(-0.5), places=4)
+        self.assertEqual(at(0), bb.STRICT_NEAR)
+        self.assertEqual(at(inner), bb.STRICT_NEAR)  # the same everywhere inside the inner circle
+        self.assertLess(bb.STRICT_NEAR, bb.THRESHOLD_NEAR, "stricter than normal there too")
+        self.assertAlmostEqual(at(inner + sigma), bb.STRICT_FAR + (bb.STRICT_NEAR - bb.STRICT_FAR) * np.exp(-0.5), places=4)
         self.assertAlmostEqual(at(inner + 6 * sigma), bb.STRICT_FAR, places=3)
         distance = np.linspace(0, 200, 401)
         normal = bb.profile(distance, inner, bb.THRESHOLD_NEAR, bb.THRESHOLD_FAR)

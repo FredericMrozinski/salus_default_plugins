@@ -68,12 +68,13 @@ THRESHOLD_FAR = 5
 STEP_NEAR = 3.0
 STEP_FAR = 2.0
 STEP_CENTRE = 10.0  # ... and at the brush's centre, falling to STEP_NEAR at the inner circle's rim
-# Strict colours (the brush panel's switch, for less leaking): THRESHOLD_NEAR inside the inner circle, then falling as a
+# Strict colours (the brush panel's switch, for less leaking): STRICT_NEAR inside the inner circle, then falling as a
 # Gaussian of the distance beyond its rim, with STRICT_SIGMA of the inner radius (at least MIN_STRICT_SIGMA pixels) as
 # its width, to STRICT_FAR (`strict_profile`). The neighbour steps are the same as in the normal mode.
-STRICT_FAR = 3.0
-STRICT_SIGMA = 0.5
-MIN_STRICT_SIGMA = 8.0
+STRICT_NEAR = 14.0
+STRICT_FAR = 2.0
+STRICT_SIGMA = 1 / 3
+MIN_STRICT_SIGMA = 5.0
 SENSITIVITIES = ("normal", "strict")
 # Snapping to edges (`snap_to_edges`): the coarse blur (sb.BLUR_SIGMA) turns an edge into a ramp, and the growth stops on
 # the way into it, a few pixels short of the edge. Up to SNAP pixels beyond what a dab painted, a pixel joins if its colour
@@ -148,14 +149,14 @@ def profile(distance: np.ndarray, inner: int, near: float, far: float) -> np.nda
 
 
 def strict_profile(distance: np.ndarray, inner: int) -> np.ndarray:
-    """The allowed-colour limit of the strict mode at these distances from the brush's centre: THRESHOLD_NEAR within the
+    """The allowed-colour limit of the strict mode at these distances from the brush's centre: STRICT_NEAR within the
     inner circle, beyond it a Gaussian falling to STRICT_FAR (sigma: STRICT_SIGMA of the inner radius, at least
-    MIN_STRICT_SIGMA). With the default brush (inner radius 16): 12 at 8 px beyond the rim, 5 at 16 px, 3.7 at 20 px,
-    where the normal mode allows 18 still."""
+    MIN_STRICT_SIGMA). With the default brush (inner radius 16): 14 inside, 11.1 at 4 px beyond the rim, 5.9 at 8 px,
+    4.1 at 10 px, 2.1 at 16 px, where the normal mode allows 18 (16.3 at 16 px)."""
     distance = np.asarray(distance, np.float32)
     sigma = max(MIN_STRICT_SIGMA, STRICT_SIGMA * inner)
     beyond = np.maximum(distance - inner, 0) / sigma
-    return (STRICT_FAR + (THRESHOLD_NEAR - STRICT_FAR) * np.exp(-0.5 * beyond * beyond)).astype(np.float32)
+    return (STRICT_FAR + (STRICT_NEAR - STRICT_FAR) * np.exp(-0.5 * beyond * beyond)).astype(np.float32)
 
 
 def step_limit(distance: np.ndarray, inner: int) -> np.ndarray:
@@ -189,7 +190,7 @@ def window_maps(outer: int, inner: int, strict: bool = False) -> WindowMaps:
     """The maps of a dab window of radius `outer` for a brush of radius `inner` (`strict`: strict colours); the same for
     every dab of a stroke. Kept per brush size (and per value of the limits, which can be tuned while the plugin runs)."""
     return _window_maps(outer, inner, bool(strict), THRESHOLD_NEAR, THRESHOLD_FAR, STEP_NEAR, STEP_FAR, STEP_CENTRE,
-                        NEAR_MARGIN, FALLOFF, STRICT_FAR, STRICT_SIGMA, MIN_STRICT_SIGMA)
+                        NEAR_MARGIN, FALLOFF, STRICT_NEAR, STRICT_FAR, STRICT_SIGMA, MIN_STRICT_SIGMA)
 
 
 @functools.lru_cache(maxsize=64)
