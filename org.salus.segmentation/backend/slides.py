@@ -1,4 +1,7 @@
-"""Slide viewer: whole slide images as Deep Zoom pyramids for OpenSeadragon.
+"""Slide viewer: whole slide images (and plain pictures) as Deep Zoom pyramids for OpenSeadragon.
+
+Slide formats are read by OpenSlide; what it cannot read (JPEG, PNG, BMP, plain TIFF, ...) by Pillow, through
+openslide-python's ImageSlide, which offers the same interface with a single level.
 
 The frontend asks GET /slide/info?file=<path> (size, tile size, a slide id) and OpenSeadragon then asks for
 GET /slide/tiles/<slide id>/<level>/<col>_<row>.jpeg. Each slide is opened once and shared by all viewers of it; tiles
@@ -40,8 +43,35 @@ PREWARM_MAX_TILES_PER_LEVEL = 64  # overview levels are rendered when a slide is
 MAX_DIRECT_READ = 4096  # px per side that may be read from a slide level for one tile; larger reads use the overview
 OVERVIEW_REDUCTION = 16  # the overview is this much smaller than level 0
 OVERVIEW_BLOCK = 4096  # level-0 pixels per side of the blocks the overview is read in
-SLIDE_SUFFIXES = {".svs", ".tif", ".tiff", ".ndpi", ".scn", ".mrxs", ".vms", ".vmu", ".bif"}
 TILE_NAME = re.compile(r"^(\d+)_(\d+)\.jpeg$")
+MAX_PICTURE_PIXELS = 1_000_000_000  # Pillow refuses pictures over ~179 MP as "decompression bombs"; these are our own files
+
+
+if openslide is not None:
+    class PictureSlide(openslide.ImageSlide):
+        """A picture (one level) read by Pillow. Pillow decodes it into memory once, on the first read, and its crops
+        are not safe from several threads at once, which the tile renderer and the smart brush use."""
+
+        def __init__(self, path):
+            Image.MAX_IMAGE_PIXELS = max(Image.MAX_IMAGE_PIXELS or 0, MAX_PICTURE_PIXELS)
+            super().__init__(path)
+            self._read_lock = threading.Lock()
+
+        def read_region(self, location, level, size):
+            with self._read_lock:
+                return super().read_region(location, level, size)
+
+
+def open_image(path) -> "openslide.AbstractSlide":
+    """OpenSlide for slide formats, Pillow (PictureSlide) for the rest; OpenSlideError if neither can read it."""
+    try:
+        return openslide.OpenSlide(str(path))
+    except openslide.OpenSlideUnsupportedFormatError:
+        pass
+    try:
+        return PictureSlide(str(path))
+    except Exception as e:  # Pillow: unknown or broken file
+        raise openslide.OpenSlideError(f"neither OpenSlide nor Pillow can read it ({e})") from None
 
 
 class TileCache:
@@ -104,7 +134,7 @@ class Slide:
 
     def __init__(self, path: Path):
         self.path = path
-        self.slide = openslide.OpenSlide(str(path))
+        self.slide = open_image(path)
         self.id = _slide_id(path)
         self.dz = DeepZoomGenerator(self.slide, tile_size=TILE_SIZE, overlap=OVERLAP, limit_bounds=True)
         self._overview = None
@@ -237,9 +267,9 @@ class Slides:
         `release(viewer)`."""
         if openslide is None:
             raise ViewerError(f"The slide viewer needs OpenSlide, which is not installed ({IMPORT_ERROR}). Run backend/setup.sh.", 503)
-        path = Path(file).expanduser()
-        if path.suffix.lower() not in SLIDE_SUFFIXES or not path.is_file():
-            raise ViewerError("That is not a slide file on the server.", 404)
+        path = Path(file).expanduser()  # which files belong to a project is up to its file types
+        if not path.is_file():
+            raise ViewerError("That image does not exist on the server.", 404)
         with self._lock:
             slide = self._by_path.get(str(path))
             if slide is not None and slide.id == _slide_id(path):
@@ -248,7 +278,7 @@ class Slides:
             try:
                 slide = Slide(path)
             except openslide.OpenSlideError as e:
-                raise ViewerError(f"OpenSlide cannot read this file: {e}", 415) from None
+                raise ViewerError(f"This image cannot be read: {e}", 415) from None
             slide.viewers.add(viewer)
             self.by_id[slide.id] = slide
             self._by_path[str(path)] = slide

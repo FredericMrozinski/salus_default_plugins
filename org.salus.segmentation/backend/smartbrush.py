@@ -51,6 +51,11 @@ MARGIN = int(math.ceil(3 * BLUR_SIGMA))  # extra pixels read around the brush, s
 MAX_READ = 4096   # px per side read from a slide level for one dab; zoomed further out, the slide's overview is used
 
 
+class Pending(Exception):
+    """A dab cannot be made yet (a segmentation model is still working on the view there, see modelbrush.py); the
+    stroke tries again later."""
+
+
 def pick_device() -> str:
     if torch.cuda.is_available():
         return "cuda"
@@ -219,6 +224,7 @@ class Stroke:
         self.dabs: list[tuple[int, int, np.ndarray]] = []  # (u, v) of the window's top-left, mask
         self.polygon: BaseGeometry | None = None  # smart polygon: the drawn polygon, in grid coordinates
         self.todo: deque[tuple[int, int]] = deque()  # smart polygon: dab centres not done yet
+        self.waiting = False  # the last call stopped at a dab that is not ready yet (see Pending)
         self.lock = threading.Lock()
 
     def grid(self, x: float, y: float) -> tuple[int, int]:
@@ -253,11 +259,17 @@ class Stroke:
     def outline_dabs(self, read_region, budget: float = 1.0) -> list[dict]:
         """Works through the smart polygon's dab centres for about `budget` seconds. Returns the new dabs."""
         out, end = [], time.monotonic() + budget
+        self.waiting = False
         while self.todo and time.monotonic() < end:
             pu, pv = self.todo.popleft()
             # grid pixel (u, v) has its centre at (u + 0.5, v + 0.5)
             keep = lambda r, c, pu=pu, pv=pv: shapely.contains_xy(self.polygon, pu - OUTER + c + 0.5, pv - OUTER + r + 0.5)  # noqa: E731
-            dab = self._dab(read_region, pu, pv, keep)
+            try:
+                dab = self._dab(read_region, pu, pv, keep)
+            except Pending:
+                self.todo.appendleft((pu, pv))
+                self.waiting = True
+                break
             if dab:
                 out.append(dab)
         return out
@@ -274,8 +286,13 @@ class Stroke:
                 return []
             points = [(lu + (u - lu) * i // steps, lv + (v - lv) * i // steps) for i in range(1, steps + 1)]
         out = []
+        self.waiting = False
         for pu, pv in points:
-            dab = self._dab(read_region, pu, pv)
+            try:
+                dab = self._dab(read_region, pu, pv)
+            except Pending:  # the rest of the way is done on a later call, from the last dab made
+                self.waiting = True
+                break
             self.last = (pu, pv)
             if dab:
                 out.append(dab)
@@ -304,32 +321,49 @@ class Stroke:
         return shapely.transform(geometry, lambda c: c / s + (self.x0, self.y0))
 
 
+def _from_overview(overview, x: float, y: float, span: float, size: int) -> np.ndarray:
+    """The level-0 square (x, y, span) cut from the overview and scaled to `size`; what lies outside the image is
+    white, like the viewer shows it (Pillow cannot cut outside an image)."""
+    r = OVERVIEW_REDUCTION
+    x0, y0, x1, y1 = x / r, y / r, (x + span) / r, (y + span) / r
+    k = size / (x1 - x0)  # output pixels per overview pixel
+    out = Image.new("RGB", (size, size), (255, 255, 255))
+    cx0, cy0, cx1, cy1 = max(x0, 0), max(y0, 0), min(x1, overview.width), min(y1, overview.height)
+    ox0, oy0 = round((cx0 - x0) * k), round((cy0 - y0) * k)
+    ox1, oy1 = round((cx1 - x0) * k), round((cy1 - y0) * k)
+    if ox1 > ox0 and oy1 > oy0:
+        part = overview.resize((ox1 - ox0, oy1 - oy0), Image.BILINEAR, box=(cx0, cy0, cx1, cy1))
+        out.paste(part.convert("RGB"), (ox0, oy0))
+    return np.asarray(out)
+
+
+def read_view(slide, x: float, y: float, scale: float, size: int) -> np.ndarray:
+    """The slide as seen at `scale` (screen pixels per level-0 pixel): `size` x `size` RGB pixels whose top-left is the
+    level-0 point (x, y)."""
+    os_slide = slide.slide
+    down = 1 / scale  # level-0 pixels per screen pixel
+    span = size * down
+    level = os_slide.get_best_level_for_downsample(max(down, 1.0))
+    ds = os_slide.level_downsamples[level]
+    if span / ds > MAX_READ:  # no pyramid level small enough: use the overview
+        return _from_overview(slide.overview(), x, y, span, size)
+    ix, iy = int(math.floor(x)), int(math.floor(y))
+    read_w = int(math.ceil((x - ix + span) / ds)) + 1
+    block = slide.read_region((ix, iy), level, (read_w, read_w))
+    flat = Image.new("RGB", block.size, (255, 255, 255))  # outside the scanned area: white, like the viewer
+    flat.paste(block, mask=block.getchannel("A"))
+    box = ((x - ix) / ds, (y - iy) / ds, (x - ix + span) / ds, (y - iy + span) / ds)
+    return np.asarray(flat.resize((size, size), Image.BILINEAR, box=box))
+
+
 def slide_reader(slide):
     """read_region(stroke, u, v) for a Slide: the RGB region around grid pixel (u, v) at the stroke's scale."""
-    os_slide = slide.slide
     size = 2 * (OUTER + MARGIN) + 1
 
     def read(stroke: Stroke, u: int, v: int) -> np.ndarray:
-        s = stroke.scale
-        down = 1 / s  # level-0 pixels per screen pixel
         # level-0 rectangle covered by the grid pixels u - OUTER - MARGIN ... + size
-        x = stroke.x0 + (u - OUTER - MARGIN) / s
-        y = stroke.y0 + (v - OUTER - MARGIN) / s
-        span = size * down
-        level = os_slide.get_best_level_for_downsample(max(down, 1.0))
-        ds = os_slide.level_downsamples[level]
-        if span / ds > MAX_READ:  # no pyramid level small enough: use the overview
-            overview = slide.overview()
-            r = OVERVIEW_REDUCTION
-            region = overview.resize((size, size), Image.BILINEAR, box=(x / r, y / r, (x + span) / r, (y + span) / r))
-            return np.asarray(region.convert("RGB"))
-        ix, iy = int(math.floor(x)), int(math.floor(y))
-        read_w = int(math.ceil((x - ix + span) / ds)) + 1
-        block = slide.read_region((ix, iy), level, (read_w, read_w))
-        flat = Image.new("RGB", block.size, (255, 255, 255))  # outside the scanned area: white, like the viewer
-        flat.paste(block, mask=block.getchannel("A"))
-        box = ((x - ix) / ds, (y - iy) / ds, (x - ix + span) / ds, (y - iy + span) / ds)
-        return np.asarray(flat.resize((size, size), Image.BILINEAR, box=box))
+        s = stroke.scale
+        return read_view(slide, stroke.x0 + (u - OUTER - MARGIN) / s, stroke.y0 + (v - OUTER - MARGIN) / s, s, size)
 
     return read
 

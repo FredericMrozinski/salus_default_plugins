@@ -1,0 +1,5 @@
+# Model weights are large and local to each machine.
+weights/
+*.ckpt
+*.pt
+*.pth

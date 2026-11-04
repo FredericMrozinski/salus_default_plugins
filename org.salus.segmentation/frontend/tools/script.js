@@ -78,17 +78,20 @@ async function step(which) {
   }
 }
 
-// How brush, eraser and polygon work. "exact" draws exactly what is drawn; the others are smart modes, where the tools
-// follow the image (the backend's MODES).
-const MODES = [
+// How brush, eraser and polygon work: "exact" draws exactly what is drawn; the others are smart modes, where the tools
+// follow the image. The backend lists them in the state (`modes`): Exact, Color Similarity, Border Growth and one per segmentation
+// model in backend/models/ (marked `model`).
+const BUILT_IN = [
   { id: "exact", name: "Exact", about: "Brush, eraser and polygon draw exactly what you draw" },
   { id: "color", name: "Color Similarity", about: "Brush, eraser and polygon follow the edges between colors in the image" },
+  { id: "border", name: "Border Growth", about: "Experimental: like Color Similarity, but each dab grows the painted area from its border (the centre at first), per pixel" },
 ];
+const modesOf = (state) => state.modes ?? BUILT_IN;
 const isSmart = (state) => !!state.mode && state.mode !== "exact";
 
 function toolButton(state, tool, label, key) {
   const smart = isSmart(state) && tool !== "pan";
-  const modeName = MODES.find((m) => m.id === state.mode)?.name;
+  const modeName = modesOf(state).find((m) => m.id === state.mode)?.name;
   return h("button", { class: "tool" + (state.tool === tool ? " on" : ""), title: `${label}${smart ? ` (${modeName})` : ""} (${key})`, onclick: () => change({ tool }) },
     icon(smart ? "smart" + tool : tool), label);
 }
@@ -103,7 +106,7 @@ function render(state) {
       // moves from reaching the viewer afterwards, so the brush circle did not show until the next click.
       h("div", { class: "mode" + (isSmart(state) ? " on" : ""), role: "radiogroup", "aria-label": "Mode" },
         icon("spark"), h("span", {}, "Mode"),
-        h("div", { class: "modes" }, MODES.map((m) => h("button", {
+        h("div", { class: "modes" }, modesOf(state).map((m) => h("button", {
           class: "mode-option" + (state.mode === m.id ? " on" : ""), role: "radio", "aria-checked": state.mode === m.id ? "true" : "false",
           title: m.about, onclick: () => state.mode !== m.id && change({ mode: m.id }),
         }, m.name)))),
@@ -127,14 +130,27 @@ function render(state) {
       : h("span", { class: "faint" }, state.project ? "No class chosen: add or pick one in the class editor" : "No project open")),
     error && h("span", { class: "error" }, error),
     h("span", { class: "grow" }),
-    h("span", { class: "faint", style: "font-size:11px" }, ...help(state.tool, isSmart(state))));
+    h("span", { class: "faint", style: "font-size:11px" }, ...help(state.tool, isSmart(state), modesOf(state).find((m) => m.id === state.mode))));
 }
 
-function help(tool, smart) {
+function help(tool, smart, mode) {
   const pan = [" Right-drag ", tool === "eraser" ? "paints" : "erases", ". Hold ", h("kbd", {}, "Ctrl"), " or ", h("kbd", {}, "Space"), " to pan."];
   const esc = [h("kbd", {}, "Esc"), " cancels."];
   const polygon = ["click points, double-click or click the first point to close, or drag freehand. ", h("kbd", {}, "⌫"), " removes the last point, ", ...esc];
   if (tool === "pan") return ["Pan: drag to move the image, scroll to zoom."];
+  if (mode?.model) { // a segmentation model (backend/models/): regions, or edges
+    const wait = "The model segments the view around the brush first. ";
+    const what = mode.output === "edges" ? "the area around its centre, up to the model's edges" : "the model's region under its centre";
+    if (tool === "brush") return [`${mode.name} brush: drag to fill, inside the circle, ${what}. `, wait, h("kbd", {}, "Shift"), "+drag erases, ", ...esc, ...pan];
+    if (tool === "eraser") return [`${mode.name} eraser: drag to erase, inside the circle, ${what}. `, wait, ...esc, ...pan];
+    return [`${mode.name} polygon: the polygon is filled and grown along its outline the same way; `, ...polygon, ...pan];
+  }
+  if (mode?.id === "border") {
+    const grows = "growing what the stroke has painted (at first the centre) into the colours of the inner circle, up to the outer circle. ";
+    if (tool === "brush") return ["Border growth brush: drag to fill, ", grows, h("kbd", {}, "Shift"), "+drag erases, ", ...esc, ...pan];
+    if (tool === "eraser") return ["Border growth eraser: drag to erase, ", grows, ...esc, ...pan];
+    return ["Border growth polygon: the polygon is filled and grown out from its outline the same way; ", ...polygon, ...pan];
+  }
   if (smart) {
     if (tool === "brush") return ["Smart brush: drag to fill the colour region under the circle, stopping at edges. ", h("kbd", {}, "Shift"), "+drag erases, ", ...esc, ...pan];
     if (tool === "eraser") return ["Smart eraser: drag to erase the colour region under the circle, stopping at edges. ", ...esc, ...pan];

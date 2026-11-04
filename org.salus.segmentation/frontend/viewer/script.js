@@ -21,8 +21,9 @@ let stroke = null; // brush or eraser stroke being drawn: {points, radius, mode:
 // A smart polygon is a stroke too, with the drawn `polygon` (image pixels), whose dabs the backend places itself.
 let smart = null;
 let preview = null; // offscreen canvas the smart brush preview is tinted in
-let press = null; // the mouse button is down: {x, y, moved, startedEmpty}
-let pointer = null; // last mouse position on the canvas (screen pixels), or null outside
+let press = null; // the mouse button or pen is down: {x, y, tool, moved, startedEmpty?, id: pointerId, pen}
+let pointer = null; // last mouse or pen position on the canvas (screen pixels), or null outside (and for fingers)
+let pointerKind = "mouse"; // the pointerType that moved last: "mouse", "pen" or "touch"
 let space = false; // Space is held: pan whatever the tool
 let ctrl = false; // Ctrl is held: the same
 let hint = "";
@@ -37,7 +38,7 @@ const isSmartBrush = (tool) => tool === "smart" || tool === "smarteraser"; // bo
 const isRoundBrush = (tool) => tool === "brush" || tool === "eraser" || isSmartBrush(tool); // the cursor is a circle
 const panning = () => space || ctrl;
 
-/** Whether a smart mode is chosen (any but "exact"); "color", color similarity, is the only one so far. */
+/** Whether a smart mode is chosen (any but "exact": color similarity, border growth or a model). */
 const isSmartMode = () => !!state?.mode && state.mode !== "exact";
 
 /** The tool in effect: a smart mode turns brush, eraser and polygon into "smart", "smarteraser" and "smartpolygon". */
@@ -83,9 +84,10 @@ function contains(shape, x, y) {
   return inside;
 }
 
-/** A click (not a drag) while panning: outside the picked shape, it is unpicked, here and in the class editor. */
+/** A click (not a drag) while panning, or a finger tap: outside the picked shape, it is unpicked, here and in the
+ *  class editor. */
 function clickWhilePanning(event) {
-  if (!focused || !event.quick || drawing()) return;
+  if (!focused || !event.quick || (drawing() && event.pointerType !== "touch")) return;
   const shape = shapes.find((s) => s.id === focused);
   const [x, y] = toImage(event.position.x, event.position.y);
   if (shape && contains(shape, x, y)) return;
@@ -151,6 +153,9 @@ async function openImage(path) {
     Overlap: slide.overlap,
     TileSize: slide.tile_size,
     Size: { Width: slide.width, Height: slide.height },
+  }, {
+    // A pen only draws (see "pen and touch" below); fingers keep OpenSeadragon's defaults: drag to pan, pinch to zoom.
+    gestureSettingsPen: { dragToPan: false, clickToZoom: false, dblClickToZoom: false, flickEnabled: false, pinchToZoom: false },
   });
   overlay = document.createElement("canvas");
   overlay.className = "overlay";
@@ -158,8 +163,10 @@ async function openImage(path) {
   for (const name of ["animation", "animation-finish", "update-viewport", "resize", "open"]) viewer.addHandler(name, redraw);
   viewer.addHandler("animation", renderStatus);
   viewer.addHandler("open", renderStatus);
-  // While drawing, the left button draws instead of panning; the mouse wheel still zooms.
-  const block = (event) => { if (drawing() && !event.originalEvent?.ctrlKey) event.preventDefaultAction = true; };
+  // While drawing, the left button draws instead of panning; the mouse wheel still zooms. Fingers always pan.
+  const block = (event) => {
+    if (event.pointerType !== "touch" && drawing() && !event.originalEvent?.ctrlKey) event.preventDefaultAction = true;
+  };
   for (const name of ["canvas-drag", "canvas-drag-end", "canvas-click", "canvas-double-click"]) viewer.addHandler(name, block);
   viewer.addHandler("canvas-click", clickWhilePanning);
   updateCursor();
@@ -341,7 +348,7 @@ function draw() {
       ctx.stroke();
     }
   }
-  const tool = mode();
+  const tool = pointerKind === "pen" ? penTool(0) : mode();
   if (isRoundBrush(tool) && pointer && !panning()) {
     // The brush (for the smart tools: the inner circle, where the seeds are). Blue while erasing.
     const erasing = stroke ? stroke.mode === "erase" : smart && !smart.polygon ? smart.mode === "erase" : tool === "eraser" || tool === "smarteraser" || shift;
@@ -396,10 +403,43 @@ function pressTool(button) {
   return isSmartMode() ? { brush: "smart", eraser: "smarteraser" }[tool] : tool;
 }
 
+// --------------------------------------------------------------------------- pen and touch (tablets)
+// On a tablet that tells them apart (iPad with Apple Pencil, Surface or Wacom pens), the pen always draws, with the
+// chosen tool (the brush when Pan is chosen), and fingers always pan and pinch-zoom (OpenSeadragon). The mouse works as
+// before. While the pen is on or just above the screen, and shortly after, touches are taken for the hand resting on it:
+// they are kept from OpenSeadragon, so a palm does not move the image during a stroke.
+
+const PALM_GRACE = 500; // ms after the pen was last seen during which new touches are still ignored
+let penSeen = -Infinity; // performance.now() when the pen was last seen
+const palms = new Set(); // ids of the touches ignored as a resting hand
+
+for (const type of ["pointerdown", "pointermove", "pointerup", "pointercancel"]) {
+  container.addEventListener(type, (event) => {
+    if (event.pointerType === "pen") penSeen = performance.now();
+    if (event.pointerType !== "touch") return;
+    if (type === "pointerdown" && (press?.pen || performance.now() - penSeen < PALM_GRACE)) palms.add(event.pointerId);
+    if (!palms.has(event.pointerId)) return;
+    event.stopImmediatePropagation(); // neither OpenSeadragon nor the handlers below see it
+    if (type === "pointerup" || type === "pointercancel") palms.delete(event.pointerId);
+  }, true);
+}
+
+/** The tool a pen press uses: the chosen one (the brush when Pan is chosen); the pen's eraser end or barrel button
+ *  (`button` 5 or 2) the eraser, or the brush when the eraser is chosen; smart or not, following the mode. */
+function penTool(button) {
+  const chosen = state?.tool === "pan" || !state?.tool ? "brush" : state.tool;
+  const tool = button === 2 || button === 5 ? (chosen === "eraser" ? "brush" : "eraser") : chosen;
+  return isSmartMode() ? { brush: "smart", eraser: "smarteraser", polygon: "smartpolygon" }[tool] : tool;
+}
+
 container.addEventListener("pointerdown", (event) => {
-  if (press || event.ctrlKey || !drawing() || !inCanvas(event)) return; // Ctrl+drag pans (OpenSeadragon)
-  const tool = pressTool(event.button);
+  if (event.pointerType === "touch") return; // fingers pan and zoom (OpenSeadragon)
+  const pen = event.pointerType === "pen";
+  if (press || !inCanvas(event)) return;
+  if (pen ? !(viewer && image && state?.tool) : event.ctrlKey || !drawing()) return; // Ctrl+drag pans (OpenSeadragon)
+  const tool = pen ? penTool(event.button) : pressTool(event.button);
   if (!tool) return;
+  pointerKind = event.pointerType; // a pen that touches down without hovering first
   if (focused) { // drawing ends the outline of a picked shape (panning keeps it)
     focused = null;
     redraw();
@@ -411,16 +451,16 @@ container.addEventListener("pointerdown", (event) => {
   const paintMode = tool === "eraser" || tool === "smarteraser" || (event.shiftKey && event.button === 0) ? "erase" : "paint";
   if (isPolygonTool(tool)) {
     if (state.class_id == null) return setHint("Choose a class in the class editor first.");
-    press = { ...p, tool, moved: false, startedEmpty: !draft };
+    press = { ...p, tool, moved: false, startedEmpty: !draft, id: event.pointerId, pen };
   } else if (paintMode === "paint" && state.class_id == null) {
     return setHint("Choose a class in the class editor first.");
   } else if (isSmartBrush(tool)) {
     if (smart) return setHint(smart.polygon ? "Wait until the smart polygon is done." : ""); // the previous stroke is still being saved
-    press = { ...p, tool, moved: true };
-    smart = { id: crypto.randomUUID(), mode: paintMode, dabs: [], pending: toImage(p.x, p.y), busy: false, ended: false, scale: transform().s, inner: radius() };
+    press = { ...p, tool, moved: true, id: event.pointerId, pen };
+    smart = { id: crypto.randomUUID(), mode: paintMode, method: state.mode, dabs: [], pending: toImage(p.x, p.y), busy: false, ended: false, scale: transform().s, inner: radius() };
     pumpSmart();
   } else {
-    press = { ...p, tool, moved: true };
+    press = { ...p, tool, moved: true, id: event.pointerId, pen };
     const t = transform();
     stroke = { points: [toImage(p.x, p.y, t)], radius: radius() / t.s, mode: paintMode };
   }
@@ -429,9 +469,15 @@ container.addEventListener("pointerdown", (event) => {
 }, true);
 
 container.addEventListener("pointermove", (event) => {
+  if (event.pointerType === "touch") { // a finger panning or zooming: no brush circle under it
+    if (pointer) (pointer = null), redraw();
+    return;
+  }
+  if (press && event.pointerId !== press.id) return; // another pointer while one draws
+  pointerKind = event.pointerType;
   const p = local(event);
   pointer = inCanvas(event) || press ? p : null;
-  if (press && drawing()) {
+  if (press && (press.pen || drawing())) {
     const t = transform();
     if (isPolygonTool(press.tool)) {
       if (!press.moved && Math.hypot(p.x - press.x, p.y - press.y) > DRAG_THRESHOLD) {
@@ -461,8 +507,8 @@ function addPoint(points, p, t) {
   points.push(toImage(p.x, p.y, t));
 }
 
-window.addEventListener("pointerup", (event) => {
-  if (!press) return;
+function release(event) {
+  if (!press || event.pointerId !== press.id) return; // not the pointer that draws (a finger, say)
   const p = local(event);
   const wasPress = press;
   press = null;
@@ -485,14 +531,18 @@ window.addEventListener("pointerup", (event) => {
     finishStroke();
   }
   redraw();
-}, true);
+}
+
+window.addEventListener("pointerup", release, true);
+window.addEventListener("pointercancel", release, true); // the system took the pen (a gesture, say): end the stroke
 
 container.addEventListener("dblclick", (event) => {
   if (isPolygonTool(mode()) && draft && inCanvas(event)) finishPolygon();
 }, true);
 
-container.addEventListener("pointerleave", () => {
+container.addEventListener("pointerleave", (event) => {
   if (!press) pointer = null;
+  if (event.pointerType === "pen") pointerKind = "mouse"; // the brush circle follows the chosen tool again
   redraw();
 });
 
@@ -618,6 +668,12 @@ async function finishStroke() {
 
 // The smart brush sends one point at a time: while the backend works on a dab, the pointer's latest position waits in
 // `pending` (positions in between are skipped; the backend places the dabs along the way itself).
+// A segmentation model (backend/models/) segments the view around the brush first, which can take seconds; meanwhile
+// the viewer polls.
+const SEGMENTING = "The model is segmenting the view around the brush…";
+const SEGMENTING_POLL_MS = 400;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 async function pumpSmart() {
   const current = smart;
   if (!current || current.busy) return;
@@ -626,11 +682,19 @@ async function pumpSmart() {
     current.pending = null;
     current.busy = true;
     try {
-      const result = await api("POST", "/smartbrush/dab", { json: { image, stroke: current.id, x, y, scale: current.scale, mode: current.mode, inner: current.inner } });
+      const result = await api("POST", "/smartbrush/dab", { json: { image, stroke: current.id, x, y, scale: current.scale, mode: current.mode, inner: current.inner, method: current.method } });
       const dabs = await Promise.all(result.dabs.map(async (d) => ({ ...d, bitmap: await bitmapOf(d.png) })));
       if (smart !== current) return;
       current.dabs.push(...dabs);
       redraw();
+      // The model is still segmenting where the brush went: ask again (for the newest point, or this one) in a moment.
+      if (result.segmenting) {
+        current.pending ??= [x, y];
+        setHint(SEGMENTING);
+        await sleep(SEGMENTING_POLL_MS);
+      } else if (hint === SEGMENTING) {
+        setHint("");
+      }
     } catch (error) {
       if (smart === current) {
         setHint(errorText(error));
@@ -648,11 +712,11 @@ async function pumpSmart() {
 // A smart polygon: the backend places the dabs along the outline and returns them in batches of about a second;
 // the viewer asks until none remain, showing each batch, then commits the polygon with its dabs.
 async function smartPolygon(points, scale, inner) {
-  const current = smart = { id: crypto.randomUUID(), mode: "paint", dabs: [], pending: null, busy: true, ended: true, scale, inner, polygon: points };
+  const current = smart = { id: crypto.randomUUID(), mode: "paint", method: state.mode, dabs: [], pending: null, busy: true, ended: true, scale, inner, polygon: points };
   setHint("Smart polygon: following the outline…");
   redraw();
   try {
-    let json = { image, stroke: current.id, points, scale, inner };
+    let json = { image, stroke: current.id, points, scale, inner, method: current.method };
     for (;;) {
       const result = await api("POST", "/smartbrush/outline", { json });
       const dabs = await Promise.all(result.dabs.map(async (d) => ({ ...d, bitmap: await bitmapOf(d.png) })));
@@ -660,6 +724,10 @@ async function smartPolygon(points, scale, inner) {
       current.dabs.push(...dabs);
       redraw();
       if (!result.remaining) break;
+      if (result.segmenting) {
+        setHint(SEGMENTING);
+        await sleep(SEGMENTING_POLL_MS);
+      }
       json = { image, stroke: current.id };
     }
   } catch (error) {

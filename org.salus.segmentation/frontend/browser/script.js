@@ -247,9 +247,35 @@ function statusButtons(project, chosen) {
       class: "status" + (all ? " on" : count ? " some" : ""),
       style: `--status:${s.color}`,
       title: all ? `Status: ${s.name}` : one ? `Set the status to ${s.name}` : `Set the status of all ${chosen.length} to ${s.name} (${count} have it)`,
-      onclick: (e) => (e.stopPropagation(), !all && setStatus(chosen.map((i) => i.path), s.id)),
+      onclick: (e) => (e.stopPropagation(), !all && changeStatus(project, chosen, s)),
     }, s.name);
   });
+}
+
+// Changing the status of more images than this at once asks first, so a slip does not overwrite a large part of the
+// project's statuses.
+const CONFIRM_STATUS_ABOVE = 4;
+
+function changeStatus(project, chosen, status) {
+  const changing = chosen.filter((i) => statusOf(project, i).id !== status.id);
+  if (changing.length > CONFIRM_STATUS_ABOVE) statusDialog(project, chosen, changing, status);
+  else setStatus(chosen.map((i) => i.path), status.id);
+}
+
+function statusDialog(project, chosen, changing, status) {
+  const from = project.statuses
+    .map((s) => [s, changing.filter((i) => statusOf(project, i).id === s.id).length])
+    .filter(([, count]) => count);
+  const cancel = h("button", { onclick: () => close() }, "Cancel");
+  const go = h("button", { class: "primary", onclick: () => (close(), setStatus(chosen.map((i) => i.path), status.id)) },
+    `Set ${changing.length} to ${status.name}`);
+  const close = modal(`Change the status of ${changing.length} images?`, [
+    h("p", {}, `${changing.length} of the ${chosen.length} selected images will get the status `,
+      h("span", { class: "status on", style: `--status:${status.color}` }, status.name), ". They have now:"),
+    h("ul", { class: "status-changes" }, from.map(([s, count]) =>
+      h("li", {}, h("span", { class: "dot", style: `background:${s.color}` }), `${s.name}: ${count}`))),
+  ], [cancel, go]);
+  cancel.focus(); // Enter or Space right away keeps the statuses
 }
 
 // --------------------------------------------------------------------------- the project picker and the "more" menu

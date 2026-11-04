@@ -18,13 +18,15 @@ selected class and tool. Every change is broadcast on the "events" channel, and 
   POST /annotations/paint {image, points, radius, class_id}  /annotations/erase {image, points, radius}
   POST /annotations/undo {image}  /annotations/redo {image}  /annotations/delete {image, id}  /annotations/rename {image, id, name}
   POST /focus {image, bbox, id?}               the viewer zooms to a region (a shape picked in the class editor)
-  POST /smartbrush/dab {image, stroke, x, y, scale, mode, inner}  /smartbrush/outline {image, stroke, points?, scale?, inner?}
+  POST /smartbrush/dab {image, stroke, x, y, scale, mode, inner, method}  /smartbrush/outline {image, stroke, points?, scale?, inner?, method?}
   POST /smartbrush/commit {image, stroke, class_id}  /smartbrush/cancel {stroke}
   POST /import/scan, /import/apply             QuPath GeoJSON (see qupath.py)
   GET  /export/settings  POST /export/start {settings, images, overwrite}  GET /export/status  POST /export/cancel
 """
 import asyncio
+import functools
 import logging
+import pkgutil
 import threading
 from pathlib import Path
 
@@ -33,6 +35,7 @@ from annotations import Annotations, count_shapes, parse_points
 from errors import ViewerError
 import qupath
 from export import ExportJob, load_shapes
+import models
 from project import Project, Registry
 from slides import Slides
 
@@ -43,9 +46,31 @@ slides = Slides()
 NO_CACHE = [("cache-control", "no-store")]
 TILE_CACHE = [("cache-control", "private, max-age=86400, immutable")]
 TOOLS = ("pan", "brush", "eraser", "polygon")
+
+
+def load_model_modes() -> list[dict]:
+    """The modes of the segmentation models in models/ (see modelbrush.py); none if there are none, or no PyTorch."""
+    if not any(pkgutil.iter_modules(models.__path__)):
+        return []  # nothing to load: PyTorch is not imported at startup
+    try:
+        import modelbrush
+    except ImportError as e:
+        log.warning("segmentation models left out: %s", e)
+        return []
+    modelbrush.load_models()
+    return [{"id": s.id, "name": s.name, "about": s.about, "model": True, "output": s.output} for s in modelbrush.SEGMENTERS.values()]
+
+
 # How brush, eraser and polygon work: "exact" draws what is drawn; the others are smart modes, where they follow the
-# image ("color": the color-similarity smart brush of smartbrush.py).
-MODES = ("exact", "color")
+# image: "color" is the colour-similarity smart brush of smartbrush.py, "border" its experimental variant that grows from
+# the stroke's border (borderbrush.py), then one mode per model in models/.
+MODE_LIST = [
+    {"id": "exact", "name": "Exact", "about": "Brush, eraser and polygon draw exactly what you draw"},
+    {"id": "color", "name": "Color Similarity", "about": "Brush, eraser and polygon follow the edges between colors in the image"},
+    {"id": "border", "name": "Border Growth", "about": "Experimental: like Color Similarity, but each dab grows the painted area from its border (the centre at first), per pixel"},
+    *load_model_modes(),
+]
+MODES = tuple(m["id"] for m in MODE_LIST)
 
 lock = threading.RLock()
 project: Project | None = None
@@ -100,7 +125,7 @@ def full_state() -> dict:
         known = []
         for entry in registry.load():
             known.append({**entry, "missing": not (Path(entry["save"]) / "project.json").is_file()})
-        return {"projects": known, "project": project.info() if project else None, **state}
+        return {"projects": known, "project": project.info() if project else None, "modes": MODE_LIST, **state}
 
 
 def use_project(p: Project) -> None:
@@ -466,11 +491,26 @@ def smartbrush_module():
     return smartbrush
 
 
+def stroke_class(sb, method):
+    """The stroke of a smart mode: colour similarity, or the regions of a segmentation model."""
+    if method in (None, "color"):
+        return sb.Stroke
+    if method == "border":
+        import borderbrush
+        return borderbrush.BorderStroke
+    import modelbrush
+    model = modelbrush.SEGMENTERS.get(method)
+    if model is None:
+        raise ViewerError("Unknown smart mode.")
+    return functools.partial(modelbrush.ModelStroke, model)
+
+
 @app.route("POST", "/smartbrush/dab")
 @guarded
 def smart_dab(req):
     """Adds dabs to a stroke (started by its first dab) up to the point (x, y), in level-0 pixels.
-    `scale` is screen pixels per level-0 pixel when the stroke started; `mode` is "paint" or "erase"."""
+    `scale` is screen pixels per level-0 pixel when the stroke started; `mode` is "paint" or "erase"; `method` the
+    smart mode ("color", "border" or a model's id). `segmenting`: some dabs wait for the model; the viewer asks again."""
     sb = smartbrush_module()
     data = body(req)
     image = data.get("image")
@@ -485,14 +525,15 @@ def smart_dab(req):
             if data.get("mode") not in ("paint", "erase"):
                 raise ViewerError("Unknown brush mode.")
             path = need_project().image_path(image)
-            stroke = strokes[key] = sb.Stroke(image, data["mode"], sb.check_scale(data.get("scale")), x, y,
-                                              sb.check_inner(data.get("inner")))
+            stroke = stroke_class(sb, data.get("method"))(image, data["mode"], sb.check_scale(data.get("scale")), x, y,
+                                                           sb.check_inner(data.get("inner")))
             stroke.slide = slides.open(str(path), req.frontend_id)  # the viewer has it open already
+            strokes[key] = stroke
     if stroke.image != image:
         raise ViewerError("This stroke belongs to another image.", 409)
     with stroke.lock:
         dabs = stroke.to_dab(sb.slide_reader(stroke.slide), x, y)
-    return {"dabs": dabs}
+        return {"dabs": dabs, "segmenting": stroke.waiting}
 
 
 @app.route("POST", "/smartbrush/outline")
@@ -513,7 +554,8 @@ def smart_outline(req):
             if len(points) < 3:
                 raise ViewerError("A polygon needs at least three points.")
             path = need_project().image_path(image)
-            stroke = sb.Stroke(image, "paint", sb.check_scale(data.get("scale")), *points[0], sb.check_inner(data.get("inner")))
+            stroke = stroke_class(sb, data.get("method"))(image, "paint", sb.check_scale(data.get("scale")), *points[0],
+                                                           sb.check_inner(data.get("inner")))
             stroke.outline(points)
             stroke.slide = slides.open(str(path), req.frontend_id)
             strokes[key] = stroke
@@ -521,7 +563,7 @@ def smart_outline(req):
         raise ViewerError("This stroke belongs to another image.", 409)
     with stroke.lock:
         dabs = stroke.outline_dabs(sb.slide_reader(stroke.slide))
-        return {"dabs": dabs, "remaining": len(stroke.todo)}
+        return {"dabs": dabs, "remaining": len(stroke.todo), "segmenting": stroke.waiting}
 
 
 @app.route("POST", "/smartbrush/commit")

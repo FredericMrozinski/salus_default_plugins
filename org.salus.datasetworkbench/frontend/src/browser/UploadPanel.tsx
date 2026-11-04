@@ -7,7 +7,8 @@ import { Dropped, fromDrop, fromFileList, Picked } from "./upload";
 /**
  * The docked panel for choosing what to upload into a source (or one of its folders). It only chooses: once the upload
  * starts, the panel closes and the progress bar (UploadProgress) takes over. If something already exists at the destination
- * there is one question for the whole batch: overwrite all or cancel.
+ * there is one question for the whole batch: skip the existing files (upload only the new ones), overwrite all, or cancel.
+ * A table source has one CSV, so there it is replace or cancel.
  */
 export function UploadPanel() {
   const target = useUploadPanel();
@@ -29,6 +30,10 @@ function Panel({ target }: { target: PanelTarget }) {
   const folderInput = useRef<HTMLInputElement>(null);
 
   const destination = (rel: string) => (folder ? `${folder}/${rel}` : rel);
+  // The backend answers with normalized paths (forward slashes, no leading or trailing slash).
+  const normalized = (path: string) => path.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  const existingSet = new Set(existing);
+  const fresh = picked.filter((p) => !existingSet.has(normalized(destination(p.rel))));
   const where = `${source.path}${folder ? ` / ${folder}` : ""}`;
 
   const start = (items: Picked[], overwrite: boolean) => {
@@ -139,13 +144,24 @@ function Panel({ target }: { target: PanelTarget }) {
                 </b>{" "}
                 file{picked.length === 1 ? "" : "s"} already exist{existing.length === 1 ? "s" : ""} here:{" "}
                 <span className="mono">{existing.slice(0, 4).join(", ")}</span>
-                {existing.length > 4 ? ` and ${existing.length - 4} more` : ""}. Overwrite all of them, or cancel the whole upload?
+                {existing.length > 4 ? ` and ${existing.length - 4} more` : ""}.{" "}
+                {fresh.length > 0
+                  ? "Skip them and upload only the new files, overwrite them, or cancel the whole upload?"
+                  : "All of them exist already. Overwrite them, or cancel the upload?"}
               </>
             )}
           </div>
-          <div className="faint">Dataset entries that use an overwritten file will show “source changed”.</div>
+          <div className="faint">
+            {!isTable && fresh.length > 0 && "Skipping keeps the files that are there and adds the others. "}
+            Dataset entries that use an overwritten file will show “source changed”.
+          </div>
           <div className="row">
-            <button className="primary small" onClick={() => start(picked, true)}>
+            {!isTable && fresh.length > 0 && (
+              <button className="primary small" onClick={() => start(fresh, false)} title="Keep the existing files; upload the others">
+                Skip existing (upload {fresh.length} new)
+              </button>
+            )}
+            <button className={`${!isTable && fresh.length > 0 ? "" : "primary "}small`} onClick={() => start(picked, true)}>
               {isTable ? "Replace" : "Overwrite all"}
             </button>
             <button

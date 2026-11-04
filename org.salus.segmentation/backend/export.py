@@ -57,10 +57,11 @@ def output_name(rel: str) -> str:
 
 
 def image_size(path: Path) -> tuple[int, int, float | None]:
-    """Width and height of the full-resolution level, and microns per pixel if known."""
+    """Width and height of the full-resolution level, and microns per pixel if known (slides, or plain pictures)."""
     if openslide is None:
         raise ViewerError("OpenSlide is not installed. Run backend/setup.sh.", 503)
-    slide = openslide.OpenSlide(str(path))
+    from slides import open_image
+    slide = open_image(path)
     try:
         mpp = slide.properties.get(openslide.PROPERTY_NAME_MPP_X)
         return slide.dimensions[0], slide.dimensions[1], float(mpp) if mpp else None
