@@ -139,8 +139,56 @@ def memory_limit(root: Path = Path("/")) -> dict | None:
             usage = max(0, usage - (_stat_value(_read(level / "memory.stat"), cache_key) or 0))
         available = max(0, limit - usage) if usage is not None else limit
         if best is None or available < best["available"] or (available == best["available"] and limit < best["limit"]):
-            best = {"limit": limit, "available": available, "usage": usage, "source": f"cgroup v{version}"}
+            best = {"limit": limit, "available": available, "usage": usage, "source": f"cgroup v{version}", "kind": "cgroup"}
     return best
+
+
+def own_memory_usage(root: Path = Path("/")) -> int | None:
+    """Memory in use by this process' own cgroup (the container), without droppable page cache; None if unreadable.
+    Readable also where the cgroup has no limit of its own."""
+    version = cgroup_version(root)
+    cgroups = own_cgroups(root)
+    if version == 2:
+        level = _levels(root / "sys/fs/cgroup", cgroups.get("", "/"))[0]
+        usage_file, cache_key = "memory.current", "inactive_file"
+    elif version == 1 and (mount := _v1_mount(root, "memory")) is not None:
+        level = _levels(mount, cgroups.get("memory", "/"))[0]
+        usage_file, cache_key = "memory.usage_in_bytes", "total_inactive_file"
+    else:
+        return None
+    usage = _int(_read(level / usage_file))
+    if usage is None:
+        return None
+    return max(0, usage - (_stat_value(_read(level / "memory.stat"), cache_key) or 0))
+
+
+# --------------------------------------------------------------------------- limits a spawner hands over
+
+_UNITS = {"": 1, "K": 1024, "M": 1024 ** 2, "G": 1024 ** 3, "T": 1024 ** 4}
+
+
+def parse_bytes(text: str | None) -> int | None:
+    """"4294967296", "4G", "512M", "1.5G" in bytes; None if empty or not a size."""
+    text = (text or "").strip().upper().removesuffix("B").removesuffix("I")
+    if not text:
+        return None
+    unit = text[-1] if text[-1] in _UNITS and not text[-1].isdigit() else ""
+    try:
+        value = float(text[:-1] if unit else text)
+    except ValueError:
+        return None
+    return int(value * _UNITS[unit]) if value > 0 else None
+
+
+def spawner_limits(environ: dict | None = None) -> dict:
+    """The limits JupyterHub's spawner gives the single-user server, as `MEM_LIMIT` (bytes) and `CPU_LIMIT` (cores). They are
+    what the Hub allots; whether they are enforced depends on the spawner (a container spawner usually also sets the cgroup)."""
+    environ = os.environ if environ is None else environ
+    try:
+        cpu = float(environ.get("CPU_LIMIT", "")) or None
+    except ValueError:
+        cpu = None
+    return {"memory": parse_bytes(environ.get("MEM_LIMIT")), "cpu": cpu if cpu and cpu > 0 else None}
 
 
 # --------------------------------------------------------------------------- CPU
@@ -193,19 +241,22 @@ def cpuset_count(root: Path = Path("/")) -> int | None:
     return None
 
 
-def effective_cpus(logical: int | None, root: Path = Path("/")) -> dict:
-    """{cores, limited_by: [...], quota, cpuset}: how many CPUs' worth of time this process can get."""
+def effective_cpus(logical: int | None, root: Path = Path("/"), spawner_cpu: float | None = None) -> dict:
+    """{cores, limited_by: None | "quota" | "cpuset" | "spawner", quota, cpuset, spawner}: how many CPUs' worth of time
+    this process can get."""
     quota = cpu_quota(root)
     cpuset = cpuset_count(root)
     candidates = [(float(logical), None)] if logical else []
+    if spawner_cpu is not None and (logical is None or spawner_cpu < logical):
+        candidates.append((round(spawner_cpu, 2), "spawner"))
     if cpuset is not None and (logical is None or cpuset < logical):
         candidates.append((float(cpuset), "cpuset"))
     if quota is not None and (logical is None or quota["cores"] < logical):
         candidates.append((quota["cores"], "quota"))
     if not candidates:
-        return {"cores": None, "limited_by": None, "quota": quota, "cpuset": cpuset}
+        return {"cores": None, "limited_by": None, "quota": quota, "cpuset": cpuset, "spawner": spawner_cpu}
     cores, by = min(candidates, key=lambda candidate: candidate[0])
-    return {"cores": cores, "limited_by": by, "quota": quota, "cpuset": cpuset}
+    return {"cores": cores, "limited_by": by, "quota": quota, "cpuset": cpuset, "spawner": spawner_cpu}
 
 
 # --------------------------------------------------------------------------- what we run in
@@ -265,3 +316,35 @@ def virtual_machine(run: Runner, root: Path = Path("/"), system: str | None = No
         if line.startswith("flags") and " hypervisor" in line:
             return {"kind": "virtual machine", "evidence": "CPU flag hypervisor"}
     return None
+
+
+# --------------------------------------------------------------------------- what to send when the values look wrong
+
+# Only these variables are shown (never the whole environment: it holds e.g. JUPYTERHUB_API_TOKEN).
+DIAGNOSTIC_VARIABLES = ("MEM_LIMIT", "MEM_GUARANTEE", "CPU_LIMIT", "CPU_GUARANTEE", "CUDA_VISIBLE_DEVICES",
+                        "NVIDIA_VISIBLE_DEVICES", "NVIDIA_DRIVER_CAPABILITIES", "KUBERNETES_SERVICE_HOST", "container")
+CGROUP_FILES = ("memory.max", "memory.high", "memory.current", "memory.limit_in_bytes", "memory.usage_in_bytes",
+                "cpu.max", "cpu.cfs_quota_us", "cpu.cfs_period_us", "cpuset.cpus.effective", "cpuset.effective_cpus")
+
+
+def diagnostics(root: Path = Path("/"), environ: dict | None = None) -> list[str]:
+    """Plain lines with the raw inputs of the limits: cgroup files at every level, the relevant mounts and variables."""
+    environ = os.environ if environ is None else environ
+    lines = ["# environment"]
+    lines += [f"{name}={environ[name]}" for name in DIAGNOSTIC_VARIABLES if name in environ] or ["(none of the limit/GPU variables set)"]
+    lines += ["", "# /proc/self/cgroup", _read(root / "proc/self/cgroup") or "(unreadable)"]
+    lines += ["", f"# cgroup version: {cgroup_version(root)}"]
+    cgroups = own_cgroups(root)
+    mounts = [("", root / "sys/fs/cgroup")] if cgroup_version(root) == 2 else \
+        [(c, m) for c in ("memory", "cpu", "cpuset") if (m := _v1_mount(root, c)) is not None]
+    for controller, mount in mounts:
+        for level in _levels(mount, cgroups.get(controller, "/")):
+            values = [f"{name}={value}" for name in CGROUP_FILES if (value := _read(level / name)) is not None]
+            lines.append(f"{level}: {' '.join(values) or '(no limit files)'}")
+    lines += ["", "# cgroup mounts"]
+    lines += [line for line in (_read(root / "proc/self/mountinfo") or "").splitlines() if "cgroup" in line][:20] or ["(none)"]
+    meminfo = [line for line in (_read(root / "proc/meminfo") or "").splitlines() if line.startswith(("MemTotal", "MemAvailable"))]
+    lines += ["", "# /proc/meminfo", *(meminfo or ["(unreadable)"])]
+    devices = sorted(p.name for p in (root / "dev").glob("nvidia*")) if (root / "dev").is_dir() else []
+    lines += ["", "# /dev/nvidia*", " ".join(devices) or "(none)"]
+    return lines

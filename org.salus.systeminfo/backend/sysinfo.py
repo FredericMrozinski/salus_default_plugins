@@ -16,6 +16,8 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Optional
@@ -52,13 +54,38 @@ def is_apple_silicon(system: str | None = None, machine: str | None = None) -> b
 
 # --------------------------------------------------------------------------- memory and CPU
 
-def memory(root: Path = Path("/")) -> dict:
+def user_rss() -> int:
+    """Resident memory of all processes of this user: in a container, what the container uses."""
+    uid = os.getuid() if hasattr(os, "getuid") else None
+    total = 0
+    for process in psutil.process_iter(["uids", "memory_info"]):
+        try:
+            if uid is None or (process.info["uids"] and process.info["uids"].real == uid):
+                total += process.info["memory_info"].rss
+        except (psutil.Error, AttributeError, TypeError):
+            continue
+    return total
+
+
+def spawner_memory_cap(root: Path, environ: dict | None = None) -> dict | None:
+    """JupyterHub's MEM_LIMIT as a cap: in use is the container's cgroup counter, else the memory of this user's processes."""
+    limit = limits.spawner_limits(environ)["memory"]
+    if limit is None:
+        return None
+    usage = limits.own_memory_usage(root)
+    if usage is None:
+        usage = user_rss()
+    return {"limit": limit, "available": max(0, limit - usage), "usage": usage, "source": "MEM_LIMIT", "kind": "spawner"}
+
+
+def memory(root: Path = Path("/"), environ: dict | None = None) -> dict:
     """`total` and `available` are what this process can use: the machine's (in a VM the VM's), or less where a container's
-    cgroup caps it (`limit` says so). `machine_total` / `machine_available` are what the OS reports."""
+    cgroup or JupyterHub's MEM_LIMIT caps it (`limit` says which). `machine_total` / `machine_available` are what the OS reports."""
     vm = psutil.virtual_memory()
     info = {"total": vm.total, "available": vm.available, "used_percent": vm.percent,
             "machine_total": vm.total, "machine_available": vm.available, "limit": None}
-    cap = limits.memory_limit(root)
+    caps = [cap for cap in (limits.memory_limit(root), spawner_memory_cap(root, environ)) if cap]
+    cap = min(caps, key=lambda c: (c["limit"], c["available"])) if caps else None
     if cap and cap["limit"] < vm.total:
         info["total"] = cap["limit"]
         info["available"] = min(cap["available"], vm.available)
@@ -116,7 +143,7 @@ def cpu(run: Runner = run_command, root: Path = Path("/")) -> dict:
         "architecture": platform.machine() or None,
         "physical_cores": psutil.cpu_count(logical=False),
         "logical_cores": logical,
-        "effective": limits.effective_cpus(logical, root),
+        "effective": limits.effective_cpus(logical, root, limits.spawner_limits()["cpu"]),
     }
     if is_apple_silicon():
         info.update(apple_core_kinds(run))
@@ -203,13 +230,51 @@ def cuda_gpus_from_torch() -> list[dict]:
         return []
 
 
-def nvidia_gpus(run: Runner = run_command, torch_present: Callable[[], bool] = torch_spec_present) -> list[dict]:
+PROBE = Path(__file__).with_name("cuda_probe.py")
+PROBE_CACHE_SECONDS = 60
+_probe_cache: dict = {}
+_probe_lock = threading.Lock()
+
+
+def run_cuda_probe(timeout: float = 20) -> dict:
+    """cuda_probe.py in a subprocess (see there): {"gpus": [...]} or {"error": ...}. Kept for a minute: the GPUs a
+    process may use do not change while it runs, and starting the CUDA driver takes a moment."""
+    with _probe_lock:
+        cached = _probe_cache.get("result")
+        if cached is not None and time.monotonic() - _probe_cache["at"] < PROBE_CACHE_SECONDS:
+            return cached
+        try:
+            done = subprocess.run([sys.executable, str(PROBE)], capture_output=True, text=True, timeout=timeout, check=False)
+            result = json.loads(done.stdout) if done.stdout.strip() else {"error": done.stderr.strip()[-300:] or f"exit code {done.returncode}"}
+        except subprocess.TimeoutExpired:
+            result = {"error": f"the CUDA driver did not answer within {timeout:.0f} s"}
+        except (OSError, ValueError) as e:
+            result = {"error": str(e)}
+        _probe_cache.update(result=result, at=time.monotonic())
+        return result
+
+
+def nvidia_gpus(run: Runner = run_command, torch_present: Callable[[], bool] = torch_spec_present,
+                probe: Callable[[], dict] = run_cuda_probe, notes: list | None = None) -> list[dict]:
+    """NVIDIA GPUs: from nvidia-smi; without it from the CUDA driver (what PyTorch would see, MIG slices included);
+    last from PyTorch if it is installed here. Why a source gave nothing goes into `notes`."""
+    notes = notes if notes is not None else []
     output = run(NVIDIA_SMI_QUERY)
     if output:
         gpus = parse_nvidia_smi(output)
         if gpus:
             return visible_gpus(gpus)
-    return cuda_gpus_from_torch() if torch_present() else []
+    notes.append("nvidia-smi: not found or not working")
+    result = probe()
+    if result.get("gpus"):
+        return result["gpus"]
+    notes.append("CUDA driver: " + (result.get("error") or "no GPU visible (CUDA_VISIBLE_DEVICES or none given to the container)"))
+    if torch_present():
+        found = cuda_gpus_from_torch()
+        if not found:
+            notes.append("PyTorch: torch.cuda sees no GPU")
+        return found
+    return []
 
 
 def parse_system_profiler(text: str) -> list[dict]:
@@ -304,14 +369,14 @@ def other_mac_gpus(run: Runner = run_command) -> list[dict]:
 
 
 def gpus(run: Runner = run_command, system: str | None = None, machine: str | None = None,
-         torch_present: Callable[[], bool] = torch_spec_present, total_memory: int | None = None) -> list[dict]:
+         torch_present: Callable[[], bool] = torch_spec_present, total_memory: int | None = None,
+         probe: Callable[[], dict] | None = None, notes: list | None = None) -> list[dict]:
     system = system or platform.system()
     if is_apple_silicon(system, machine):
         return apple_gpus(run, total_memory, torch_present)
-    found = nvidia_gpus(run, torch_present)
-    if not found and system == "Darwin":
-        found = other_mac_gpus(run)
-    return found
+    if system == "Darwin":  # an Intel Mac: no CUDA
+        return other_mac_gpus(run)
+    return nvidia_gpus(run, torch_present, probe or run_cuda_probe, notes)
 
 
 # --------------------------------------------------------------------------- all of it
@@ -327,7 +392,10 @@ def environment(run: Runner = run_command, root: Path = Path("/")) -> dict:
 
 def collect(run: Runner = run_command) -> dict:
     mem = memory()
+    notes: list[str] = []
+    found = gpus(run, total_memory=mem["total"], notes=notes)
     return {
+        "gpu_notes": notes if not found else [],
         "environment": environment(run),
         "host": socket.gethostname(),
         "os": {"system": platform.system(), "release": platform.release(),
@@ -336,5 +404,5 @@ def collect(run: Runner = run_command) -> dict:
         "pid": os.getpid(),
         "memory": mem,
         "cpu": cpu(run),
-        "gpus": gpus(run, total_memory=mem["total"]),
+        "gpus": found,
     }

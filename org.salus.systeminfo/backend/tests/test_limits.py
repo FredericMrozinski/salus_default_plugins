@@ -42,7 +42,7 @@ class CgroupV2Test(FakeRoot):
         self.write("sys/fs/cgroup/cpu.max", "150000 100000")
         self.write("sys/fs/cgroup/cpuset.cpus.effective", "0-3")
         self.assertEqual(limits.memory_limit(self.root),
-                         {"limit": 4 * GIB, "available": 2 * GIB, "usage": 2 * GIB, "source": "cgroup v2"})
+                         {"limit": 4 * GIB, "available": 2 * GIB, "usage": 2 * GIB, "source": "cgroup v2", "kind": "cgroup"})
         self.assertEqual(limits.cpu_quota(self.root), {"cores": 1.5, "source": "cgroup v2"})
         self.assertEqual(limits.cpuset_count(self.root), 4)
         self.assertEqual(limits.effective_cpus(16, self.root)["cores"], 1.5)
@@ -68,7 +68,7 @@ class CgroupV2Test(FakeRoot):
         self.write("sys/fs/cgroup/user.slice/cpu.max", "max 100000")
         self.assertIsNone(limits.memory_limit(self.root))
         self.assertIsNone(limits.cpu_quota(self.root))
-        self.assertEqual(limits.effective_cpus(8, self.root), {"cores": 8.0, "limited_by": None, "quota": None, "cpuset": None})
+        self.assertEqual(limits.effective_cpus(8, self.root), {"cores": 8.0, "limited_by": None, "quota": None, "cpuset": None, "spawner": None})
 
     def test_a_cpuset_smaller_than_the_machine(self):
         self.v2()
@@ -115,7 +115,7 @@ class MemoryTest(FakeRoot):
         self.write("sys/fs/cgroup/memory.max", str(4 * GIB))
         self.write("sys/fs/cgroup/memory.current", str(GIB))
         with self.fake_vm(64 * GIB, 40 * GIB):
-            mem = sysinfo.memory(self.root)
+            mem = sysinfo.memory(self.root, environ={})
         self.assertEqual((mem["total"], mem["available"]), (4 * GIB, 3 * GIB))
         self.assertEqual((mem["machine_total"], mem["machine_available"]), (64 * GIB, 40 * GIB))
         self.assertEqual(mem["used_percent"], 25.0)
@@ -126,12 +126,77 @@ class MemoryTest(FakeRoot):
         self.write("sys/fs/cgroup/memory.max", str(4 * GIB))
         self.write("sys/fs/cgroup/memory.current", "0")
         with self.fake_vm(64 * GIB, GIB):  # the host itself is almost full
-            self.assertEqual(sysinfo.memory(self.root)["available"], GIB)
+            self.assertEqual(sysinfo.memory(self.root, environ={})["available"], GIB)
 
     def test_without_a_cap_the_machine_counts(self):
         with self.fake_vm(16 * GIB, 8 * GIB):
-            mem = sysinfo.memory(self.root)
+            mem = sysinfo.memory(self.root, environ={})
         self.assertEqual((mem["total"], mem["available"], mem["limit"]), (16 * GIB, 8 * GIB, None))
+
+
+class SpawnerLimitTest(FakeRoot):
+    """JupyterHub hands the single-user server its limits as MEM_LIMIT and CPU_LIMIT."""
+
+    def fake_vm(self, total, available):
+        return mock.patch.object(sysinfo.psutil, "virtual_memory", return_value=mock.Mock(total=total, available=available, percent=50.0))
+
+    def test_sizes_and_limits(self):
+        self.assertEqual(limits.parse_bytes("4294967296"), 4 * GIB)
+        self.assertEqual(limits.parse_bytes("4G"), 4 * GIB)
+        self.assertEqual(limits.parse_bytes("1.5GiB"), int(1.5 * GIB))
+        self.assertEqual(limits.parse_bytes("512M"), 512 * 1024 ** 2)
+        for bad in (None, "", "lots", "0", "-1"):
+            self.assertIsNone(limits.parse_bytes(bad), bad)
+        self.assertEqual(limits.spawner_limits({"MEM_LIMIT": "8G", "CPU_LIMIT": "2.5"}), {"memory": 8 * GIB, "cpu": 2.5})
+        self.assertEqual(limits.spawner_limits({"CPU_LIMIT": "x"}), {"memory": None, "cpu": None})
+        self.assertEqual(limits.spawner_limits({}), {"memory": None, "cpu": None})
+
+    def test_mem_limit_with_the_containers_usage_counter(self):
+        # The cgroup the container sees has no limit (the cap sits above it, out of sight), but counts the usage.
+        self.v2()
+        self.write("sys/fs/cgroup/memory.max", "max")
+        self.write("sys/fs/cgroup/memory.current", str(3 * GIB))
+        self.write("sys/fs/cgroup/memory.stat", f"inactive_file {GIB}\n")
+        with self.fake_vm(512 * GIB, 300 * GIB):
+            mem = sysinfo.memory(self.root, environ={"MEM_LIMIT": str(16 * GIB)})
+        self.assertEqual((mem["total"], mem["available"]), (16 * GIB, 14 * GIB))
+        self.assertEqual((mem["limit"]["kind"], mem["limit"]["source"]), ("spawner", "MEM_LIMIT"))
+        self.assertEqual(mem["machine_total"], 512 * GIB)
+
+    def test_mem_limit_without_cgroups_counts_the_users_processes(self):
+        with self.fake_vm(512 * GIB, 300 * GIB), mock.patch.object(sysinfo, "user_rss", return_value=GIB):
+            mem = sysinfo.memory(self.root, environ={"MEM_LIMIT": "4G"})
+        self.assertEqual((mem["total"], mem["available"]), (4 * GIB, 3 * GIB))
+
+    def test_the_smaller_of_cgroup_limit_and_mem_limit_counts(self):
+        self.v2()
+        self.write("sys/fs/cgroup/memory.max", str(8 * GIB))
+        self.write("sys/fs/cgroup/memory.current", str(GIB))
+        with self.fake_vm(512 * GIB, 300 * GIB):
+            self.assertEqual(sysinfo.memory(self.root, environ={"MEM_LIMIT": str(32 * GIB)})["limit"]["kind"], "cgroup")
+            self.assertEqual(sysinfo.memory(self.root, environ={"MEM_LIMIT": str(4 * GIB)})["limit"]["kind"], "spawner")
+
+    def test_cpu_limit(self):
+        effective = limits.effective_cpus(64, self.root, spawner_cpu=4.0)
+        self.assertEqual((effective["cores"], effective["limited_by"], effective["spawner"]), (4.0, "spawner", 4.0))
+        self.v2()
+        self.write("sys/fs/cgroup/cpu.max", "200000 100000")
+        self.assertEqual(limits.effective_cpus(64, self.root, spawner_cpu=4.0)["limited_by"], "quota")
+
+
+class DiagnosticsTest(FakeRoot):
+    def test_raw_inputs_and_no_secrets(self):
+        self.v2("/kubepods/pod1")
+        self.write("sys/fs/cgroup/kubepods/pod1/memory.max", "max")
+        self.write("sys/fs/cgroup/kubepods/pod1/memory.current", "123")
+        environ = {"MEM_LIMIT": "4G", "CUDA_VISIBLE_DEVICES": "0", "JUPYTERHUB_API_TOKEN": "secret-token", "HOME": "/home/u"}
+        text = "\n".join(limits.diagnostics(self.root, environ))
+        self.assertIn("MEM_LIMIT=4G", text)
+        self.assertIn("CUDA_VISIBLE_DEVICES=0", text)
+        self.assertIn("memory.max=max memory.current=123", text)
+        self.assertIn("# cgroup version: 2", text)
+        self.assertNotIn("secret-token", text)
+        self.assertNotIn("HOME", text)
 
 
 class EnvironmentTest(FakeRoot):

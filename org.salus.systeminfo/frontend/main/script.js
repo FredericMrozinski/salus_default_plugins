@@ -36,7 +36,9 @@ function memoryCard(memory) {
   return h("section", { class: "card" },
     h("h2", {}, "Memory (RAM)"),
     h("div", { class: "big" }, bytes(memory.total)),
-    limit && limit.limit < memory.machine_total ? capped(`Capped by the container (${limit.source} memory limit)`) : null,
+    limit && limit.limit < memory.machine_total
+      ? capped(limit.kind === "spawner" ? "Capped by JupyterHub's memory limit (MEM_LIMIT)" : `Capped by the container (${limit.source} memory limit)`)
+      : null,
     bar(used, memory.total),
     rows([
       ["Available", bytes(memory.available)],
@@ -48,7 +50,11 @@ function memoryCard(memory) {
 function cpuCard(cpu) {
   const kinds = cpu.performance_cores !== undefined ? `${cpu.performance_cores} performance, ${cpu.efficiency_cores ?? 0} efficiency` : null;
   const effective = cpu.effective ?? {};
-  const limitedBy = { quota: `the container's CPU quota (${effective.quota?.source})`, cpuset: "the CPUs it may run on (cpuset)" }[effective.limited_by];
+  const limitedBy = {
+    quota: `the container's CPU quota (${effective.quota?.source})`,
+    cpuset: "the CPUs it may run on (cpuset)",
+    spawner: "JupyterHub's CPU limit (CPU_LIMIT)",
+  }[effective.limited_by];
   return h("section", { class: "card" },
     h("h2", {}, "CPU"),
     h("div", { class: "big" }, cpu.model ?? "Unknown CPU"),
@@ -88,7 +94,8 @@ function yesNo(value, yes = "yes", no = "no") {
 function gpuCard(gpu) {
   const memory = gpu.unified_memory
     ? [["Memory", `${bytes(gpu.memory_total)} unified (shared with the CPU)`]]
-    : [["VRAM", bytes(gpu.memory_total)], ["Free", gpu.memory_free !== null ? bytes(gpu.memory_free) : null]];
+    : [[gpu.mig ? "VRAM of the slice" : "VRAM", bytes(gpu.memory_total)],
+       ["Free", gpu.memory_free !== null && gpu.memory_free !== undefined ? bytes(gpu.memory_free) : "not reported (needs NVML)"]];
   const mps = gpu.mps ? [["MPS (PyTorch)", yesNo(gpu.mps.available, "available", "not available")]] : [];
   return h("section", { class: "card" },
     h("h2", {}, gpu.index !== undefined && gpu.index !== null ? `GPU ${gpu.index}` : "GPU"),
@@ -98,6 +105,9 @@ function gpuCard(gpu) {
       ["Vendor", gpu.vendor],
       ...(gpu.chip && gpu.chip !== gpu.name ? [["Chip", gpu.chip]] : []),
       ["GPU cores", gpu.cores],
+      ["Kind", gpu.mig ? "MIG slice of a larger GPU" : null],
+      ["Compute capability", gpu.compute_capability],
+      ["Multiprocessors", gpu.multiprocessors],
       ...memory,
       ["Metal", gpu.metal],
       ["Driver", gpu.driver],
@@ -113,6 +123,7 @@ function render() {
     h("h1", {}, info ? info.host : "System Info"),
     info ? h("span", { class: "faint" }, `${info.os.system} ${info.os.version || info.os.release} · Python ${info.python}`) : null,
     h("span", { class: "grow" }),
+    h("button", { onclick: showDiagnostics, title: "The raw inputs (cgroup files, limits, GPU libraries), to send along when a value looks wrong" }, "Diagnostics"),
     h("button", { onclick: load, title: "Read the values again" }, "Refresh"));
   if (!info) {
     app.replaceChildren(header, h("div", { class: error ? "empty error" : "empty" }, error || "Loading…"));
@@ -120,11 +131,38 @@ function render() {
   }
   const gpus = info.gpus.length
     ? info.gpus.map(gpuCard)
-    : [h("section", { class: "card" }, h("h2", {}, "GPU"), h("div", { class: "faint" }, "No GPU found (no NVIDIA GPU via nvidia-smi or PyTorch, no Apple Silicon)."))];
+    : [h("section", { class: "card" }, h("h2", {}, "GPU"), h("div", { class: "faint" }, "No GPU found."),
+        info.gpu_notes?.length ? h("ul", { class: "faint notes" }, info.gpu_notes.map((note) => h("li", {}, note))) : null)];
   app.replaceChildren(...[header,
     error ? h("p", { class: "error" }, error) : null,
     h("div", { class: "cards" }, memoryCard(info.memory), cpuCard(info.cpu), ...gpus, environmentCard(info.environment)),
     h("p", { class: "faint", style: "margin-top: 14px; font-size: 12px" }, "What the Salus server's plugin backend can use (in a container: its share), not the device this page is shown on.")].filter(Boolean));
+}
+
+async function showDiagnostics() {
+  const text = h("pre", { class: "diagnostics mono" }, "Collecting…");
+  const copy = h("button", { onclick: async () => {
+    try {
+      await navigator.clipboard.writeText(text.textContent);
+      copy.textContent = "Copied";
+    } catch {
+      getSelection().selectAllChildren(text); // no clipboard access (e.g. plain http): select it for Cmd/Ctrl+C
+      copy.textContent = "Selected: press Cmd/Ctrl+C";
+    }
+  } }, "Copy");
+  const close = () => backdrop.remove();
+  const backdrop = h("div", { class: "backdrop", onclick: (event) => event.target === backdrop && close() },
+    h("div", { class: "dialog" },
+      h("header", {}, "Diagnostics"),
+      h("div", { class: "content" }, text),
+      h("footer", {}, copy, h("button", { onclick: close }, "Close"))));
+  document.body.append(backdrop);
+  try {
+    const response = await salus.http.get("/diagnostics");
+    text.textContent = response.ok ? await response.text() : `Could not collect the diagnostics: ${response.status} ${await response.text()}`;
+  } catch (e) {
+    text.textContent = `Could not collect the diagnostics: ${message(e)}`;
+  }
 }
 
 async function load() {
