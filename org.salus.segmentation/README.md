@@ -64,7 +64,7 @@ in `project.json`.
 ## Drawing
 
 Four tools, and the **mode** (the row of buttons above them) that says how brush, eraser and polygon work: **Exact** draws exactly
-what is drawn; the smart modes make them follow the image. So far there is one smart mode, **Color Similarity**. The
+what is drawn; the smart modes make them follow the image: **Border Growth**, and one per segmentation model (see below). The
 **width** (screen pixels) is the brush and eraser diameter, and in a smart mode the diameter of the inner circle.
 
 - **Pan** (`V`), or hold `Ctrl` or `Space` with any tool. The mouse wheel always zooms. The viewer takes the keyboard
@@ -83,39 +83,101 @@ what is drawn; the smart modes make them follow the image. So far there is one s
 - **Polygon** (`P`): click to place points; double-click, click the first point or press Enter to close. Or press and drag to draw freehand;
   releasing closes the shape. `Esc` cancels, `Backspace` removes the last point. Self-intersections are repaired.
 
-In the Color Similarity mode:
+In a smart mode:
 
 - **Smart brush**: drag over a region to fill it, stopping at edges; `Shift`+drag erases with the same brush (from
   every class). The brush segments the image **as it is shown**, at the current zoom: its circles (the inner one is drawn;
   the outer one, 200 px, is how far a dab may reach) are screen pixels, so it behaves the same at every zoom, and zooming in
-  gives finer outlines. Each dab: the region under the brush is blurred and its colours bucketed (PyTorch on CUDA, MPS or
-  the CPU); from every seed in the inner circle the region is flooded on a 4-pixel lattice up to the outer circle, where a
-  pixel joins if its bucket is close to the seed's and its exact colour within a threshold; gaps up to 40 px enclosed on
-  all four sides are filled. Dabs are placed one inner radius apart. The stroke becomes a polygon when the button is
-  released. The other settings are fixed in `backend/smartbrush.py` for now.
+  gives finer outlines. Dabs are placed one inner radius apart. The stroke becomes a polygon when the button is released.
 - **Smart eraser**: the smart brush, always erasing.
 - **Smart polygon**: drawn like a polygon; when it is closed, the polygon is filled and smart brush dabs are run along its
   outline (one inner radius apart), seeded only from inside the polygon, so the shape grows out to the edges around it.
   The preview fills in while the dabs run; `Esc` cancels.
-- **Border Growth** (experimental mode, `backend/borderbrush.py`): like Color Similarity, the inner circle defines the
-  allowed colours, and nothing leaves the outer circle. But a dab does not flood from seeds in the
-  inner circle: it grows what the stroke has painted so far from its border, through allowed pixels (4-connected, every
-  pixel, no stride), and **compares with the neighbour**: a pixel is only entered from a neighbour whose colour differs
+
+- **Border Growth**, the smart mode (`backend/borderbrush.py`, on the stroke machinery of `backend/smartbrush.py`): each dab reads the region
+  under the brush and blurs it (Gaussian, sigma 5 px; PyTorch on CUDA, MPS or the CPU). The inner circle defines the
+  allowed colours, and nothing leaves the outer circle. A dab grows what the stroke has painted so far from its border,
+  through allowed pixels (4-connected, every pixel), and **compares with the neighbour**: a pixel is only entered from a neighbour whose colour differs
   by at most a step limit (blurred colours change by about 1–2 per pixel inside smooth regions and 5–10 across edges),
   so the growth cannot chain through a series of allowed colours across an edge. Both limits depend on the distance
   from the **inner circle**: lenient inside it and up to half its radius (at least 8 px) beyond, with colours within
   18 of the inner circle's and steps up to 3; then falling over 60 px to strict, colours within 5 and steps up to 2,
-  for the rest of the outer circle (`THRESHOLD_NEAR/FAR`, `STEP_NEAR/FAR`, `NEAR_MARGIN`, `FALLOFF`; Color
-  Similarity uses 15 everywhere). The brush is generous where it is held and strict further away, so where the brush
+  for the rest of the outer circle (`THRESHOLD_NEAR/FAR`, `STEP_NEAR/FAR`, `NEAR_MARGIN`, `FALLOFF`). The brush is generous where it is held and strict further away, so where the brush
   goes, and its width, steer the growth. Inside the inner circle the step limit is loosened further: 10 at the centre,
   falling to 3 at the inner circle's rim (`STEP_CENTRE`), so a click on an edge or a fine structure, where colours change
   by more than 3 from pixel to pixel, still gets away from its centre pixel instead of painting nothing. The first dab, or one with nothing
   painted in its outer circle, starts from the brush's centre; an allowed colour that is not connected to the painted
-  area is not reached, so a stroke that starts on the wrong side of an edge stays there. Gaps are filled as in Color
-  Similarity. The growth is one connected-component labelling (scipy) on a grid of twice the resolution, whose extra
-  cells are the links between neighbours; each distinct colour is tested once against a KD-tree of the inner circle's
-  colours. A dab takes about 20 ms. The smart polygon works the same way, with only the inner circle's colours inside
-  the polygon.
+  area is not reached, so a stroke that starts on the wrong side of an edge stays there. Gaps up to 40 px enclosed on
+  all four sides are filled (`sb.fill_gaps`).
+
+  **Colors: Normal / Strict** (a switch in the tools panel, shown in Border Growth; shared state `sensitivity`, kept while
+  the plugin runs, read when a stroke starts). *Normal* is the brush as described above. *Strict* allows fewer colours away
+  from the brush, for less leaking into neighbouring tissue: inside the inner circle the colour limit is the same (18), beyond
+  its rim it falls as a Gaussian of the distance, sigma half the inner radius (at least 8 px), down to 3 (`strict_profile`,
+  `STRICT_FAR`, `STRICT_SIGMA`, `MIN_STRICT_SIGMA`). With the default brush (inner radius 16): 12 at 8 px beyond the rim, 5 at
+  16 px, 3.7 at 20 px, where Normal still allows 18 (and 5 only 60 px further out). The neighbour steps are the same in both.
+  On a slowly changing colour (no edge), a dab grows 60 px from the centre with Normal and 35 px with Strict.
+
+  **Snapping to edges** (setting *Border growth: snap to edges*, `border_snap`, on by default). The growth compares colours
+  blurred with sigma 5 px (so that noise and texture do not stop it), which turns an edge into a ramp about 10 px wide on
+  each side; on the way into it the steps between neighbours grow beyond the step limit and the colours drift from the
+  inner circle's, so the growth stops 5 to 10 px short of the edge (measured: 10 px at a red/blue edge, 4 to 5 px at a weaker
+  one). After each dab, `snap_to_edges` looks at the pixels up to 10 px (`SNAP`) beyond the grown painting in a copy
+  blurred with sigma 1 px only (kept in the stroke's tiles with the coarse one). A pixel joins if all of these hold:
+  - its colour is nearer to the painted side's mean colour than to the other side's (rings 6 px wide, `SNAP_RING`, on both
+    sides, averaged over about 36 px around it), and the two sides differ by 12 or more (`SNAP_CONTRAST`);
+  - its colour is close to the painted side's mean colour itself: within 10 right at the grown border, falling as a
+    Gaussian (sigma 6 px) with the distance beyond it, 7 at 5 px, 2.5 at 10 px (`snap_tolerance`, `SNAP_TOLERANCE`,
+    `SNAP_TOLERANCE_SIGMA`);
+  - it connects to the painting.
+
+  Snapped pixels only count as painted: the growth of later dabs starts from grown pixels alone (from snapped ones, past
+  the steep part of the edge, it stepped into the neighbouring region wherever its colours were allowed), snapping is
+  measured from grown pixels (it does not build on itself, dab by dab), and gaps are filled only between grown pixels
+  (snapping makes a hole around a nucleus fit the nucleus, and filling would then close it over the nucleus). Measured on a
+  densely cellular TCGA slide: snapping adds 2 to 5 % to the painting, all of it at its border (before these limits:
+  2 to 5 times the painting, leaking into the surrounding tissue). At a sharp edge the border ends 1 to 3 px before it
+  (the last pixels are a mix of both colours even in the lightly blurred copy), at a weaker one 1 to 2 px; without
+  snapping 5 to 10 px. Compiled with numba (`_snap`; `snap_to_edges_numpy` is the reference the tests compare it with);
+  about 1.5 ms per dab.
+
+  **Smooth outline** (setting *Border growth: smooth outline*, `border_smooth`, on by default). The brush works on a grid of
+  screen pixels at the zoom where the stroke started, so zoomed in further its outline is a staircase, and snapping and the
+  growth leave lone pixels and notches. When the stroke ends, `sb.smooth_mask_outline` makes the annotation's outline smooth:
+  a majority vote of the neighbours (Gaussian of 1 grid pixel, kept where at least half is painted: `SMOOTH_SIGMA`) takes
+  away lone pixels, spurs and notches of a pixel; the outline's staircase is straightened (0.75 px, `SMOOTH_STRAIGHTEN`)
+  and its corners are cut in 3 rounds of Chaikin (each corner becomes two points a quarter along its edges:
+  `SMOOTH_ROUNDS`), holes as well. A smart polygon's own polygon is not changed. The preview while painting still shows
+  the pixels. Measured on a stroke painted at a quarter of full resolution: the area changes by 0.1 %, the outline moves
+  by 2 % of the area in all, and has a third fewer points; about 20 ms more when a long stroke ends.
+
+  **Following the brush** (setting *Border growth: always follow the brush*, `border_follow`, on by default). Growing only
+  from the painted area, a dab adds nothing when an edge sharper than the step limit lies between that area and the brush,
+  and neither does the next: the painting stops as if at an invisible wall while the brush moves on. It is not the colours:
+  each dab allows the colours of its own inner circle, so everything in the inner circle passes the colour test; it is the
+  step limit on the way there. With the setting on, a dab that does not reach the brush's centre also grows from the centre,
+  as the first dab does: a core of a quarter of the inner radius (at least 2 px, `CORE`, `MIN_CORE`) is painted, along the
+  line from the previous dab's centre to this one, and the growth goes on from it by the same rules. Dabs are one inner
+  radius apart, so cores around the centres alone would leave gaps between them, and each rescued dab could become an
+  island; along the line they join into a band that connects the new part to what is painted. (A dab more than two dab
+  spacings from the previous one, a jump, gets the core around its centre only.) So the painting always follows the
+  brush without gaps, and beyond the core it still stops at edges; a stroke that keeps up with the brush paints exactly what it did without the setting. Smart polygons never do this
+  (only the polygon's inside counts). Off, the painting stays where it stopped and does not cross such an edge. The smart polygon works the same way, with only the inner circle's colours inside the polygon.
+
+  **Speed.** The growth is a flood from the border of the painted area (compiled with numba): it visits only the pixels
+  that join and their rejected neighbours, never the painted area itself, and tests a pixel's colour (against a grid of
+  the inner circle's colours) and the step to its neighbour only where it gets to. Without numba the same rule runs as a
+  connected-component labelling of the whole window (scipy, `grow_labelled`); the tests check that both paint the same
+  pixels. The stroke keeps the blurred slide in tiles of 128 screen pixels, so each part of the slide is read and blurred
+  once per stroke instead of by every dab that covers it (dabs one inner radius apart overlap by about 90 %). The limits
+  by distance are computed once per brush size, replies are cut to the pixels a dab paints, and PyTorch uses only as many
+  threads as the container may use (cgroup quota, CPU set, `CPU_LIMIT`), not one per core of the machine. Measured on an
+  M4 Pro on a TCGA slide: 5.6 ms per dab instead of 21 ms at full resolution, 11 ms instead of 63 ms zoomed out, with
+  the same pixels.
+
+  **Reach** (setting *Border growth: reach*, `border_reach`, 40–200, default 200): the radius of the area one dab looks at,
+  in screen pixels. The work grows with its square, so 100 is about a quarter of the work of 200; a dab then stops sooner in
+  large even regions, and you move the brush more. Applies to the next stroke.
 - Undo / redo: `Ctrl/Cmd+Z`, `Ctrl/Cmd+Shift+Z` (50 steps per image, while the plugin runs).
 
 Shapes of different classes may overlap; every shape is independent.
@@ -124,7 +186,7 @@ Shapes of different classes may overlap; every shape is independent.
 
 A segmentation model can drive the brush, eraser and polygon as a smart mode of its own (`backend/modelbrush.py`). Put a
 module in `backend/models/` that registers the model (an example is in `backend/models/__init__.py`); when the backend
-starts, it appears in the tools as a mode after Color Similarity.
+starts, it appears in the tools as a mode after Border Growth.
 
 **Swin Edges** (`backend/models/swin_edges.py`) is the Swin-UNet edge model (Swin-B encoder, convolutional decoder,
 92 M parameters), rebuilt from the training code without Lightning; it gets RGB as 0..1. The weights come from its
@@ -204,10 +266,12 @@ project and are the defaults of the next export.
 ## Setup
 
 ```sh
-backend/setup.sh        # creates backend/.venv with OpenSlide, Pillow, Shapely, libvips and PyTorch
+backend/setup.sh        # creates backend/.venv with OpenSlide, Pillow, Shapely, libvips, PyTorch and numba
 ```
 
-Create it on the machine that runs Salus; the virtualenv cannot be copied between machines.
+Create it on the machine that runs Salus; the virtualenv cannot be copied between machines. In an existing virtualenv,
+add numba with `backend/.venv/bin/pip install numba` (without it Border Growth works, but slowly). The first Border Growth
+dab after installing compiles the flood (about a second); the compiled code is kept in `backend/__pycache__`.
 
 pyvips must use the libvips bundled by `pyvips-binary`, not a system one (Homebrew): that one loads a second OpenMP
 library next to PyTorch's, and the backend crashes (segmentation fault in `libomp`, Salus then answers 503) as soon as
@@ -218,7 +282,7 @@ PyTorch works hard, e.g. with a segmentation model. `setup.sh` takes care of it;
 
 ```
 manifest.toml
-backend/   plugin.py (routes, shared state), project.py, annotations.py (Shapely), smartbrush.py (smart brush, PyTorch), modelbrush.py + models/ (model brushes), qupath.py (import), export.py (pixel maps), slides.py + errors.py (from the File Viewer), run.sh, setup.sh, tests/
+backend/   plugin.py (routes, shared state), project.py, annotations.py (Shapely), smartbrush.py (smart brush machinery, PyTorch), borderbrush.py (Border Growth, numba), modelbrush.py + models/ (model brushes), qupath.py (import), export.py (pixel maps), slides.py + errors.py (from the File Viewer), run.sh, setup.sh, tests/
 frontend/  browser/, viewer/, tools/, classes/, export/ (plain ES modules, no build step), shared/ (common.js, picker.js, osd.js, base.css, salus_sdk.js), vendor/ (OpenSeadragon)
 ```
 

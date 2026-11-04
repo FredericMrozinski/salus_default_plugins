@@ -1,7 +1,7 @@
 /* Shared look. Salus adds its theme stylesheet once a page has loaded; the fallbacks keep the page readable before that. */
 html, body { height: 100%; }
 body { margin: 0; background: var(--salus-bg, #14161b); color: var(--salus-fg, #e6e6e6); font: var(--salus-font-size, 13px) var(--salus-font, system-ui, sans-serif); }
-button { font: inherit; color: var(--salus-fg, #e6e6e6); padding: 4px 10px; background: var(--salus-surface-2, #23262e); border: 1px solid var(--salus-border, #2a2d35); border-radius: var(--salus-radius, 6px); cursor: pointer; }
+button { font: inherit; color: var(--salus-fg, #e6e6e6); padding: 4px 10px; background: var(--salus-surface-2, #23262e); border: 1px solid var(--salus-border-button, var(--salus-border, #2a2d35)); border-radius: var(--salus-radius, 6px); cursor: pointer; }
 button:hover:not(:disabled) { background: var(--salus-surface-3, #33373f); }
 button:disabled { opacity: .5; cursor: default; }
 .mono { font-family: var(--salus-font-mono, ui-monospace, monospace); font-size: 12px; }

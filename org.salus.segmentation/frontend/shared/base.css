@@ -2,7 +2,7 @@
 html, body { height: 100%; }
 body { margin: 0; background: var(--salus-bg, #14161b); color: var(--salus-fg, #e6e6e6); font: var(--salus-font-size, 13px) var(--salus-font, system-ui, sans-serif); }
 button, input, select, textarea { font: inherit; color: var(--salus-fg, #e6e6e6); }
-button { padding: 4px 10px; background: var(--salus-surface-2, #23262e); border: 1px solid var(--salus-border, #2a2d35); border-radius: var(--salus-radius, 6px); cursor: pointer; }
+button { padding: 4px 10px; background: var(--salus-surface-2, #23262e); border: 1px solid var(--salus-border-button, var(--salus-border, #2a2d35)); border-radius: var(--salus-radius, 6px); cursor: pointer; }
 button:hover:not(:disabled) { background: var(--salus-surface-3, #33373f); }
 button:disabled { opacity: .5; cursor: default; }
 button.primary { background: var(--salus-accent, #3a6df0); color: var(--salus-accent-fg, #fff); border-color: transparent; }

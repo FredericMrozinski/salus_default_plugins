@@ -2,7 +2,7 @@
    keep the page readable before that and if it does not arrive. */
 body { background: var(--salus-bg, #14161b); color: var(--salus-fg, #e6e6e6); font: var(--salus-font-size, 13px) var(--salus-font, system-ui, sans-serif); margin: 0; }
 button, input, select, textarea { font: inherit; color: var(--salus-fg, #e6e6e6); }
-button { padding: 4px 12px; background: var(--salus-surface-2, #23262e); border: 1px solid var(--salus-border, #2a2d35); border-radius: var(--salus-radius, 6px); cursor: pointer; }
+button { padding: 4px 12px; background: var(--salus-surface-2, #23262e); border: 1px solid var(--salus-border-button, var(--salus-border, #2a2d35)); border-radius: var(--salus-radius, 6px); cursor: pointer; }
 button:hover:not(:disabled) { background: var(--salus-surface-3, #33373f); }
 button:disabled { opacity: .5; cursor: default; }
 input, select, textarea { padding: 4px 8px; background: var(--salus-surface, #1b1e25); border: 1px solid var(--salus-border, #2a2d35); border-radius: var(--salus-radius, 6px); }

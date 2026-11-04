@@ -11,6 +11,9 @@ api-version = 3
 entry-component = "browser"
 
 # One backend per user: the four components share the open project, the image, the class and the tool through it.
+[config]
+configurable = "configurable.toml"
+
 [backend]
 entrypoint = "backend/run.sh"
 lifetime = "session"

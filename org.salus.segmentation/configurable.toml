@@ -1,0 +1,43 @@
+# What can be configured in the Segmentation plugin (shown under Settings in Salus).
+
+[[setting]]
+key = "border_reach"
+name = "Border growth: reach"
+description = """How far one dab of the Border growth brush can grow from the brush, in screen pixels (the radius of the area it \
+looks at). Smaller is faster, as the work grows with the square of it (100 is about a quarter of the work of 200), but a dab \
+then stops sooner in large even regions, so you move the brush more. Applies to the next stroke."""
+type = "int"
+default = 200
+min = 40
+max = 200
+
+[[setting]]
+key = "border_follow"
+name = "Border growth: always follow the brush"
+description = """Border growth grows what you painted from its border; a sharp edge between that and the brush stops it, and \
+the painting stays behind while the brush moves on. On: a dab that does not reach the brush's centre also paints a narrow band \
+along the brush's path (a quarter of the brush's inner circle wide on each side) and grows from there, so the painting always \
+follows the brush, without gaps. Off: the \
+painting stays where it stopped, and never crosses such an edge. Applies to the next stroke."""
+type = "bool"
+default = true
+
+[[setting]]
+key = "border_snap"
+name = "Border growth: snap to edges"
+description = """Border growth compares slightly blurred colours (so that noise and texture do not stop it), and so stops a few \
+pixels short of an edge. On: after each dab, the pixels up to 10 px beyond are checked in an almost unblurred copy of the \
+image, and those close in colour to the painted side (and nearer to it than to the other side of the edge) join, so the border \
+comes to within 1 to 3 px of the edge. Only where the two sides clearly differ in colour, never more than 10 px. Applies to \
+the next stroke."""
+type = "bool"
+default = true
+
+[[setting]]
+key = "border_smooth"
+name = "Border growth: smooth outline"
+description = """When a stroke ends, its outline is smoothed: lone pixels, spurs and notches of a pixel are taken away (a majority \
+of the neighbours decides), and the pixel staircase, which shows when you zoom in further than you painted at, becomes a smooth \
+curve. Off: the outline follows the pixels exactly. Applies to the next stroke."""
+type = "bool"
+default = true

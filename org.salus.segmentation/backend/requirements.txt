@@ -6,3 +6,4 @@ pyvips[binary]
 torch
 torchvision
 scipy
+numba

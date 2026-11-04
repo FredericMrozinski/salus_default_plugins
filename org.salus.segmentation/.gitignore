@@ -1,0 +1,6 @@
+# the virtualenv (backend/setup.sh) and Python caches
+.venv/
+__pycache__/
+# numba keeps the compiled Border Growth code here (see README, Setup)
+*.nbi
+*.nbc

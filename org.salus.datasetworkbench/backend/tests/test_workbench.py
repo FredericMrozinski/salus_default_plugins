@@ -274,6 +274,20 @@ class RenameDeleteTests(Base):
         self.assertEqual(sorted(self.ids()), ["a.svs", "sub/b.svs"])  # c.pdf was unused and is forgotten; b.svs stays missing
         self.assertEqual(self.files.info()["missing"], 1)
 
+    def test_rescan_forgets_unused_gone_files_and_keeps_used_ones_as_missing(self):
+        self.point("sub/b.svs")
+        (self.files.path / "sub/b.svs").unlink()
+        (self.files.path / "sub/deep/c.pdf").unlink()
+        self.wb.scan_source(self.files.id)
+        self.assertEqual(sorted(self.ids()), ["a.svs", "sub/b.svs"])  # c.pdf was unused and is forgotten
+        self.assertEqual(self.files.info()["missing"], 1)
+        self.assertEqual(self.state("slide"), "source_missing")
+        # Once no entry uses it any more, the next rescan forgets the missing file too.
+        self.ds.delete_entry(self.entry)
+        self.wb.scan_source(self.files.id)
+        self.assertEqual(sorted(self.ids()), ["a.svs"])
+        self.assertEqual(self.files.info()["missing"], 0)
+
     def test_rename_source_and_group_keep_references(self):
         self.point("a.svs")
         self.wb.catalog.create_group("", "cohort")

@@ -5,7 +5,7 @@ The four components (browser, viewer, tools, classes) share one state, kept here
 selected class and tool. Every change is broadcast on the "events" channel, and each component redraws what concerns it.
 
   GET  /state                                  projects, the open project and the shared state
-  PUT  /state {image?, class_id?, tool?, mode?, brush?, opacity?, hidden?}
+  PUT  /state {image?, class_id?, tool?, mode?, brush?, opacity?, hidden?, sensitivity?}   sensitivity: Border growth's colours
   POST /projects {name, root, extensions, save} | /projects/open {save} | /projects/{id}/use | /projects/{id}/forget
   GET  /fs?path=                               server folders, for choosing the root and save folders
   GET  /images?rescan=1                        the images of the open project, with their shape counts and statuses
@@ -62,12 +62,11 @@ def load_model_modes() -> list[dict]:
 
 
 # How brush, eraser and polygon work: "exact" draws what is drawn; the others are smart modes, where they follow the
-# image: "color" is the colour-similarity smart brush of smartbrush.py, "border" its experimental variant that grows from
-# the stroke's border (borderbrush.py), then one mode per model in models/.
+# image: "border" grows the stroke from its border through the colours of the brush's inner circle (borderbrush.py, on the
+# stroke machinery of smartbrush.py), then one mode per model in models/.
 MODE_LIST = [
     {"id": "exact", "name": "Exact", "about": "Brush, eraser and polygon draw exactly what you draw"},
-    {"id": "color", "name": "Color Similarity", "about": "Brush, eraser and polygon follow the edges between colors in the image"},
-    {"id": "border", "name": "Border Growth", "about": "Experimental: like Color Similarity, but each dab grows the painted area from its border (the centre at first), per pixel"},
+    {"id": "border", "name": "Border Growth", "about": "Brush, eraser and polygon follow the image: each dab grows the painted area from its border into the colors of the inner circle, stopping at edges"},
     *load_model_modes(),
 ]
 MODES = tuple(m["id"] for m in MODE_LIST)
@@ -78,7 +77,8 @@ annotation_cache: dict[str, Annotations] = {}
 shape_counts: dict[str, int] = {}
 # brush: the tool width in screen pixels (brush and eraser diameter; twice the smart tools' inner radius)
 # hidden: ids of the classes whose shapes the viewer does not show (and the eraser leaves alone)
-state = {"image": None, "class_id": None, "tool": "pan", "mode": "exact", "brush": 32, "opacity": 0.35, "hidden": []}
+state = {"image": None, "class_id": None, "tool": "pan", "mode": "exact", "brush": 32, "opacity": 0.35, "hidden": [],
+         "sensitivity": "normal"}  # sensitivity: Border growth's colours, "normal" or "strict" (see borderbrush)
 
 
 def broadcast(event: dict) -> None:
@@ -193,6 +193,10 @@ def put_state(req):
             state["mode"] = data["mode"]
         if "brush" in data:
             state["brush"] = max(4, min(200, int(data["brush"])))
+        if "sensitivity" in data:
+            if data["sensitivity"] not in ("normal", "strict"):
+                raise ViewerError("Unknown sensitivity.")
+            state["sensitivity"] = data["sensitivity"]
         if "opacity" in data:
             state["opacity"] = max(0.0, min(1.0, float(data["opacity"])))
         if "hidden" in data:
@@ -492,12 +496,12 @@ def smartbrush_module():
 
 
 def stroke_class(sb, method):
-    """The stroke of a smart mode: colour similarity, or the regions of a segmentation model."""
-    if method in (None, "color"):
-        return sb.Stroke
-    if method == "border":
+    """The stroke of a smart mode: Border growth, or the regions of a segmentation model."""
+    if method in (None, "border"):
         import borderbrush
-        return borderbrush.BorderStroke
+        return functools.partial(borderbrush.BorderStroke, reach=border_setting("border_reach"),
+                                 follow=border_setting("border_follow", True), sensitivity=state["sensitivity"],
+                                 snap=border_setting("border_snap", True), smooth=border_setting("border_smooth", True))
     import modelbrush
     model = modelbrush.SEGMENTERS.get(method)
     if model is None:
@@ -505,12 +509,21 @@ def stroke_class(sb, method):
     return functools.partial(modelbrush.ModelStroke, model)
 
 
+def border_setting(key, default=None):
+    """A Border growth setting (see configurable.toml); `default` if it cannot be read."""
+    try:
+        return app.config.get_blocking(key, default)
+    except Exception as e:  # noqa: BLE001 - a setting must not stop the brush
+        log.warning("%s not read: %s", key, e)
+        return default
+
+
 @app.route("POST", "/smartbrush/dab")
 @guarded
 def smart_dab(req):
     """Adds dabs to a stroke (started by its first dab) up to the point (x, y), in level-0 pixels.
     `scale` is screen pixels per level-0 pixel when the stroke started; `mode` is "paint" or "erase"; `method` the
-    smart mode ("color", "border" or a model's id). `segmenting`: some dabs wait for the model; the viewer asks again."""
+    smart mode ("border" or a model's id). `segmenting`: some dabs wait for the model; the viewer asks again."""
     sb = smartbrush_module()
     data = body(req)
     image = data.get("image")

@@ -1,0 +1,25 @@
+[description]
+name = "Backup"
+developer = "Salus Organization"
+description = "Backs up folders on demand into encrypted, compressed, deduplicated bundles (restic), and restores them."
+contact = "frederic.mrozinski@tum.de"
+icon = "icon.svg"
+version = "0.1.0"
+
+[meta]
+api-version = 3
+entry-component = "backup"
+
+[config]
+configurable = "configurable.toml"
+
+# One backend per user; backups keep running when the panel is closed.
+[backend]
+entrypoint = "backend/run.sh"
+lifetime = "session"
+
+[[frontend-component]]
+component-name = "backup"
+title = "Backup"
+entrypoint = "frontend/index.html"
+target-panel = "center"

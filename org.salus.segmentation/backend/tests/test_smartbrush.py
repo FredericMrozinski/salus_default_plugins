@@ -30,12 +30,25 @@ def fill_reference(mask, gap, all4):
     return (h & v) if all4 else (h | v)
 
 
-def two_regions(split):
-    """A region image: red left of column `split`, blue right of it."""
-    img = np.zeros((R, R, 3), np.uint8)
-    img[:, :split] = (200, 60, 60)
-    img[:, split:] = (40, 40, 190)
-    return img
+class DiskStroke(sb.Stroke):
+    """A smart stroke whose dabs paint their inner circle (cut by `keep_seeds`): the stroke machinery without a smart
+    brush (Border growth and the model brushes are tested in their own files)."""
+
+    def _dab(self, read_region, pu, pv, keep_seeds=None):
+        read_region(self, pu, pv)
+        o = sb.OUTER
+        yy, xx = np.mgrid[0:N, 0:N]
+        mask = (xx - o) ** 2 + (yy - o) ** 2 <= self.inner ** 2
+        if keep_seeds is not None:
+            rows, cols = np.nonzero(mask)
+            mask[rows[~keep_seeds(rows, cols)], cols[~keep_seeds(rows, cols)]] = False
+        u0, v0 = pu - o, pv - o
+        self.dabs.append((u0, v0, mask))
+        return sb.dab_reply(self, u0, v0, mask)
+
+
+def grey(stroke, u, v):
+    return np.full((R, R, 3), 128, np.uint8)
 
 
 class GapTest(unittest.TestCase):
@@ -57,33 +70,16 @@ class GapTest(unittest.TestCase):
         self.assertTrue(sb.fill_gaps(mask, 5, True)[3, 3])
 
 
-class DabTest(unittest.TestCase):
-    def test_dab_stops_at_a_colour_edge(self):
-        split = sb.MARGIN + sb.OUTER + 60  # 60 px right of the centre
-        mask = sb.dab_mask(two_regions(split))
-        self.assertEqual(mask.shape, (N, N))
-        edge = split - sb.MARGIN  # the edge in window coordinates
-        self.assertTrue(mask[sb.OUTER, sb.OUTER])
-        self.assertFalse(mask[:, edge:].any())  # nothing beyond the edge
-        # The blur mixes the colours near a strong edge, so the exact check stops about 1.5 sigma before it.
-        self.assertTrue(mask[sb.OUTER, edge - int(2 * sb.BLUR_SIGMA)])
-
-    def test_inner_radius_sets_the_seeds_and_spacing(self):
-        # Red left of the centre column + 10, blue right of it: a small inner circle seeds only red, a wide one both.
-        img = two_regions(sb.MARGIN + sb.OUTER + 10)
-        edge = sb.OUTER + 10
-        self.assertFalse(sb.dab_mask(img, inner=4)[:, edge:].any())
-        self.assertTrue(sb.dab_mask(img, inner=40)[:, edge + 20:].any())
+class StrokeTest(unittest.TestCase):
+    def test_inner_radius_sets_the_spacing(self):
         self.assertEqual(sb.Stroke("a.svs", "paint", 1.0, 0, 0, inner=40).spacing, 40)
-        self.assertEqual(sb.Stroke("a.svs", "paint", 1.0, 0, 0, inner=1).spacing, sb.STRIDE)
+        self.assertEqual(sb.Stroke("a.svs", "paint", 1.0, 0, 0, inner=1).spacing, sb.MIN_SPACING)
         self.assertEqual(sb.check_inner(None), sb.INNER)
         self.assertEqual(sb.check_inner(10_000), sb.MAX_INNER)
 
-    def test_dab_stays_inside_the_outer_circle(self):
-        mask = sb.dab_mask(np.full((R, R, 3), 128, np.uint8))
-        yy, xx = np.mgrid[0:N, 0:N]
-        self.assertFalse(mask[(xx - sb.OUTER) ** 2 + (yy - sb.OUTER) ** 2 > (sb.OUTER + 1) ** 2].any())
-        self.assertGreater(mask.mean(), 0.7)  # a uniform image: (almost) the whole circle
+    def test_a_plain_stroke_has_no_dab_of_its_own(self):
+        with self.assertRaises(NotImplementedError):
+            sb.Stroke("a.svs", "paint", 1.0, 0, 0).to_dab(grey, 0, 0)
 
 
 class GeometryTest(unittest.TestCase):
@@ -97,36 +93,32 @@ class GeometryTest(unittest.TestCase):
         self.assertEqual(g.bounds, (5, 5, 55, 45))
 
     def test_stroke_geometry_is_in_level0_pixels(self):
-        # A region whose left part (up to 60 screen px right of the first point) is red: at scale 0.5 (one screen
-        # pixel = two level-0 pixels) the painted area must end about 120 level-0 pixels right of the point, less
-        # the 1.5 sigma the blur costs at the edge.
-        stroke = sb.Stroke("a.svs", "paint", 0.5, 1000.0, 2000.0)
-        reader = lambda st, u, v: two_regions(sb.MARGIN + sb.OUTER + 60 - u)  # noqa: E731
-        dabs = stroke.to_dab(reader, 1000.0, 2000.0)
+        # At scale 0.5 (one screen pixel = two level-0 pixels) a dab's inner circle of 16 screen px is 32 level-0 px.
+        stroke = DiskStroke("a.svs", "paint", 0.5, 1000.0, 2000.0, inner=16)
+        dabs = stroke.to_dab(grey, 1000.0, 2000.0)
         self.assertEqual(len(dabs), 1)
-        self.assertAlmostEqual(dabs[0]["w"], N / 0.5)
         g = stroke.geometry()
         x0, y0, x1, y1 = g.bounds
-        self.assertAlmostEqual(x0, 1000 - 2 * sb.OUTER, delta=2)
-        self.assertAlmostEqual(x1, 1000 + 2 * (60 - 1.5 * sb.BLUR_SIGMA), delta=6)
-        self.assertAlmostEqual(y1 - y0, 2 * N, delta=2)
+        # The reply is cut to the painted pixels: it covers exactly the stroke's area.
+        self.assertEqual((dabs[0]["x"], dabs[0]["y"]), (x0, y0))
+        self.assertAlmostEqual(dabs[0]["w"], x1 - x0, delta=1)
+        self.assertAlmostEqual(dabs[0]["h"], y1 - y0, delta=1)
+        self.assertLess(dabs[0]["w"], N / 0.5)
+        for low, high, centre in ((x0, x1, 1000), (y0, y1, 2000)):
+            self.assertAlmostEqual(low, centre - 32, delta=2)
+            self.assertAlmostEqual(high, centre + 34, delta=2)  # the centre pixel covers [centre, centre + 2)
 
-    def test_smart_polygon_grows_from_inside_only(self):
-        # Red left of grid column 60, blue right of it. The polygon's right side is 8 px from the blue, so dabs centred
-        # on it have inner circles reaching into the blue; only seeds inside the polygon count, so no blue is painted.
-        stroke = sb.Stroke("a.svs", "paint", 1.0, 0.0, -50.0)
-        reader = lambda st, u, v: two_regions(sb.MARGIN + sb.OUTER + 60 - u)  # noqa: E731
+    def test_smart_polygon_dabs_run_along_the_outline_seeded_inside(self):
+        stroke = DiskStroke("a.svs", "paint", 1.0, 0.0, -50.0)
         square = [(0, -50), (52, -50), (52, 50), (0, 50)]
         stroke.outline(square)
         self.assertEqual(len(stroke.todo), int(np.ceil(2 * (52 + 100) / sb.SPACING)))
         while stroke.todo:
-            stroke.outline_dabs(reader)
+            stroke.outline_dabs(grey)
         g = stroke.geometry()
         self.assertTrue(g.buffer(1e-6).contains(sb.shapely.Polygon(square)))
-        x0, y0, x1, y1 = g.bounds
-        self.assertLessEqual(x1, 60)
-        self.assertLess(x0, -100)  # grown out over the red
-        self.assertLess(y0, -150)
+        # the disk dabs paint only where they may seed (inside the polygon): the result is the polygon
+        self.assertAlmostEqual(g.area, 52 * 100, delta=52 + 100)
 
     def test_smart_polygon_without_dabs_is_the_polygon(self):
         stroke = sb.Stroke("a.svs", "paint", 2.0, 10.0, 20.0)
@@ -134,11 +126,10 @@ class GeometryTest(unittest.TestCase):
         self.assertAlmostEqual(stroke.geometry().area, 200)
 
     def test_dabs_follow_the_pointer(self):
-        stroke = sb.Stroke("a.svs", "paint", 1.0, 0.0, 0.0)
-        reader = lambda st, u, v: np.full((R, R, 3), 128, np.uint8)  # noqa: E731
-        stroke.to_dab(reader, 0, 0)
-        self.assertEqual(stroke.to_dab(reader, sb.SPACING - 1, 0), [])  # too close for a new dab
-        self.assertEqual(len(stroke.to_dab(reader, 3 * sb.SPACING, 0)), 3)
+        stroke = DiskStroke("a.svs", "paint", 1.0, 0.0, 0.0)
+        stroke.to_dab(grey, 0, 0)
+        self.assertEqual(stroke.to_dab(grey, sb.SPACING - 1, 0), [])  # too close for a new dab
+        self.assertEqual(len(stroke.to_dab(grey, 3 * sb.SPACING, 0)), 3)
 
 
 class BrushAnnotationsTest(Base):

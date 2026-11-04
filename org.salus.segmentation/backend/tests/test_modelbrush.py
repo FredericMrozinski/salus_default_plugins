@@ -140,8 +140,9 @@ class ModelBrushTest(unittest.TestCase):
         self.assertLess((time.perf_counter() - t) / 10, 0.05)  # well under the time between dabs
 
     def test_ids_of_the_built_in_modes_are_refused(self):
-        with self.assertRaises(ValueError):
-            mb.register("color", "Colour", halves)
+        for taken in ("exact", "border"):
+            with self.assertRaises(ValueError):
+                mb.register(taken, "Taken", halves)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,7 @@
+# What can be configured in the backup plugin (see the Salus docs, guides/config.md).
+
+[[setting]]
+key = "backup_root"
+name = "Backup folder"
+description = "Where the backup bundles are kept: one folder per bundle, each a restic repository with its own password. Copy a bundle's folder into another machine's backup folder to take it along."
+type = "directory-path"

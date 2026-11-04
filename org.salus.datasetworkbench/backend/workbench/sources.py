@@ -246,8 +246,12 @@ class FileSource(Source):
                 except OSError:
                     continue
 
-    def scan(self, progress: Progress | None = None) -> dict:
-        """Matches the files on disk to the items. Moved files keep their id (same size and mtime)."""
+    def scan(self, progress: Progress | None = None, referenced: set[str] | None = None) -> dict:
+        """Matches the files on disk to the items. Moved files keep their id (same size and mtime).
+
+        Files that are gone stay as `missing` items when a dataset references them (`referenced`: the item ids that
+        datasets use), so those entries show 'source missing'; the others are forgotten. Without `referenced` every
+        gone file stays as missing."""
         with self.lock:
             seen = {rel: st for rel, st in self._walk(progress)}
             now = now_iso()
@@ -273,7 +277,12 @@ class FileSource(Source):
                     else:
                         created.append(rel)
                 moved_ids = {item_id for _, item_id in moved}
-                vanished = [r["id"] for r in orphans if r["id"] not in moved_ids and r["status"] != "missing"]
+                gone = [r for r in orphans if r["id"] not in moved_ids]
+                if referenced is None:
+                    forgotten = []
+                else:  # also items that were missing already and are no longer used
+                    forgotten = [r["id"] for r in gone if r["id"] not in referenced]
+                vanished = [r["id"] for r in gone if r["status"] != "missing" and r["id"] not in forgotten]
                 with Tx(conn):
                     for rel, item_id in moved:
                         st = seen[rel]
@@ -287,8 +296,10 @@ class FileSource(Source):
                         [(ext_of(rel), seen[rel].st_size, seen[rel].st_mtime_ns, now, rel) for rel in seen if rel in existing])
                     for ids in chunks(vanished):
                         conn.execute(f"UPDATE items SET status='missing' WHERE id IN ({','.join('?' * len(ids))})", ids)
+                    for ids in chunks(forgotten):
+                        conn.execute(f"DELETE FROM items WHERE id IN ({','.join('?' * len(ids))})", ids)
                     meta_set(conn, "last_scan", now)
-            return {"files": len(seen), "new": len(created), "moved": len(moved), "missing": len(vanished)}
+            return {"files": len(seen), "new": len(created), "moved": len(moved), "missing": len(vanished), "removed": len(forgotten)}
 
     def register(self, rel_path: str, file_hash: str | None = None) -> dict:
         """Records one file (after an upload) as an item; an existing item keeps its id."""

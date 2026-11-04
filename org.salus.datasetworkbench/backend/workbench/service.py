@@ -65,7 +65,7 @@ class Workbench:
 
         def work(progress):
             if isinstance(source, FileSource):
-                result = source.scan(progress)
+                result = source.scan(progress, self.referenced_items(source_id))
             else:
                 if source.declared_columns():
                     result = source.ingest(progress)
@@ -171,12 +171,16 @@ class Workbench:
         self.notify({"type": "tree_changed"})
         return new_path
 
-    def delete_item(self, source_id: str, path: str) -> None:
-        source = self.catalog.find_source(source_id)
+    def referenced_items(self, source_id: str) -> set[str]:
+        """The items of a source that dataset entries use."""
         referenced: set[str] = set()
         for dataset in self.datasets.datasets_referencing(source_id):
             referenced |= dataset.referenced_items(source_id)
-        source.delete_item(path, referenced)
+        return referenced
+
+    def delete_item(self, source_id: str, path: str) -> None:
+        source = self.catalog.find_source(source_id)
+        source.delete_item(path, self.referenced_items(source_id))
         self.source_changed(source_id)
         self.notify({"type": "tree_changed"})
 

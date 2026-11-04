@@ -1,7 +1,7 @@
 """Model brushes: smart brushes driven by a segmentation model running in the background.
 
 A model is registered with `register()` (see models/__init__.py) and becomes a mode in the tools, next to Exact and
-Color Similarity. When a stroke reaches a part of the slide the model has not segmented yet, the view around the brush
+Border Growth. When a stroke reaches a part of the slide the model has not segmented yet, the view around the brush
 (the model's `view` x `view` screen pixels, at the stroke's zoom) is read and handed to the model in a background thread.
 A model returns either
 
@@ -42,7 +42,7 @@ CACHE_SIZE = 12
 
 @dataclass(frozen=True)
 class Segmenter:
-    id: str        # the mode's id in the shared state ("exact" and "color" are taken)
+    id: str        # the mode's id in the shared state ("exact" and "border" are taken)
     name: str      # shown in the tools
     segment: Callable[[np.ndarray], np.ndarray]  # RGB view (view x view x 3, uint8) -> view x view map (see `output`)
     about: str = ""  # tooltip
@@ -61,7 +61,7 @@ def register(id: str, name: str, segment: Callable[[np.ndarray], np.ndarray], ab
     """Makes a model available as a smart mode. `segment` is called in a background thread, one view at a time; load
     heavy things (weights) on its first call rather than at import, so the plugin starts quickly. `output` says what it
     returns: "labels" (a region id per pixel) or "edges" (an edge map, see the module docstring)."""
-    if id in ("exact", "color", "border") or not id.isidentifier():
+    if id in ("exact", "border") or not id.isidentifier():
         raise ValueError(f"invalid mode id {id!r}")
     if output not in ("labels", "edges"):
         raise ValueError(f"output must be 'labels' or 'edges', not {output!r}")
@@ -273,6 +273,4 @@ class ModelStroke(sb.Stroke):
             mask[o - r:o + r + 1, o - r:o + r + 1] = (window == view.labels[cy, cx]) & disk
         u0, v0 = pu - o, pv - o
         self.dabs.append((u0, v0, mask))
-        if not mask.any():
-            return None
-        return {"x": self.x0 + u0 / s, "y": self.y0 + v0 / s, "w": n / s, "h": n / s, "png": sb.png_of(mask)}
+        return sb.dab_reply(self, u0, v0, mask)
