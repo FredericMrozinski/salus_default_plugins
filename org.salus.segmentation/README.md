@@ -152,6 +152,17 @@ In a smart mode:
   the pixels. Measured on a stroke painted at a quarter of full resolution: the area changes by 0.1 %, the outline moves
   by 2 % of the area in all, and has a third fewer points; about 20 ms more when a long stroke ends.
 
+  **Streaming** (setting *Border growth: stream over the connection*, `border_stream`, on by default). Over HTTP the viewer
+  sends a point, waits for its dabs, then sends the newest point: over a slow connection (a remote server, JupyterHub's
+  proxy in front) the painting comes in jumps, one round trip each. Streamed, the viewer sends the stroke over the channel
+  `ws://smartbrush` as the pointer moves (`start`, `point` at most once per animation frame, `end` with the class, or
+  `cancel`), without waiting, and the backend sends each batch of dabs back as soon as it is done (`dabs`), then `done` after
+  the commit or `error`. So the painting follows one round trip behind, smoothly. The backend's channel handler only queues
+  the messages in the order they came; one worker thread per stroke works through them in that order (`stream_worker` in
+  `plugin.py`), and points waiting behind others are merged into the newest (the dabs are placed along the way anyway), so a
+  slow server catches up instead of falling further behind. A stroke whose viewer sends nothing for 2 minutes is dropped.
+  If sending fails, or with the setting off, the stroke goes over HTTP as before; smart polygons and model brushes always do.
+
   **Following the brush** (setting *Border growth: always follow the brush*, `border_follow`, on by default). Growing only
   from the painted area, a dab adds nothing when an edge sharper than the step limit lies between that area and the brush,
   and neither does the next: the painting stops as if at an invisible wall while the brush moves on. It is not the colours:

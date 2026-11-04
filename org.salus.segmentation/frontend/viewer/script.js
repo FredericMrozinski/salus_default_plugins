@@ -2,6 +2,7 @@
 // shape being drawn. Tools and classes are shared state (chosen in the tools and class panels); the drawn shapes go to the
 // backend, which keeps them as GeoJSON in image pixel coordinates.
 import { api, fileName, followState, message as errorText, onEvent, salus, setState } from "../shared/common.js";
+import { Payload } from "../shared/salus_sdk.js";
 import { createViewer, zoomPercent } from "../shared/osd.js";
 
 const container = document.getElementById("viewer");
@@ -458,7 +459,7 @@ container.addEventListener("pointerdown", (event) => {
     if (smart) return setHint(smart.polygon ? "Wait until the smart polygon is done." : ""); // the previous stroke is still being saved
     press = { ...p, tool, moved: true, id: event.pointerId, pen };
     smart = { id: crypto.randomUUID(), mode: paintMode, method: state.mode, dabs: [], pending: toImage(p.x, p.y), busy: false, ended: false, scale: transform().s, inner: radius() };
-    pumpSmart();
+    startSmart(smart);
   } else {
     press = { ...p, tool, moved: true, id: event.pointerId, pen };
     const t = transform();
@@ -489,7 +490,8 @@ container.addEventListener("pointermove", (event) => {
     } else if (isSmartBrush(press.tool)) {
       if (smart && !smart.ended) {
         smart.pending = toImage(p.x, p.y, t);
-        pumpSmart();
+        if (smart.streamed) scheduleStream(smart);
+        else pumpSmart();
       }
     } else if (stroke) {
       addPoint(stroke.points, p, t);
@@ -525,7 +527,8 @@ function release(event) {
   } else if (isSmartBrush(wasPress.tool)) {
     if (smart && !smart.ended) {
       smart.ended = true;
-      pumpSmart();
+      if (smart.streamed) endStream(smart);
+      else pumpSmart();
     }
   } else if (stroke) {
     finishStroke();
@@ -741,6 +744,100 @@ async function smartPolygon(points, scale, inner) {
   await commitSmart(current);
 }
 
+// Streaming (Border Growth, setting `border_stream`, see backend/plugin.py "streamed strokes"): the points go to the backend
+// over ws://smartbrush as the pointer moves, at most one per animation frame (the newest), without waiting for answers;
+// the dabs come back as soon as each point is done, and the stroke ends with "done" after the commit. So over a slow
+// connection the painting follows one round trip behind, smoothly, instead of in jumps. If sending fails, the stroke
+// goes over HTTP as before (pumpSmart).
+let streamSetting = true;
+const loadStreamSetting = () => salus.config.get("border_stream", true).then((value) => (streamSetting = value !== false)).catch(() => undefined);
+loadStreamSetting();
+salus.onShown(loadStreamSetting);
+const STREAM_DONE_TIMEOUT_MS = 60000;
+
+function sendStream(message) {
+  salus.send("smartbrush", Payload.json(message));
+}
+
+function startSmart(current) {
+  if (streamSetting && current.method === "border") {
+    const [x, y] = current.pending;
+    try {
+      sendStream({ type: "start", stroke: current.id, image, x, y, scale: current.scale, mode: current.mode, inner: current.inner, method: current.method });
+      current.streamed = true;
+      current.pending = null;
+      return;
+    } catch (error) {
+      console.warn("Streaming the brush failed, using HTTP:", error);
+    }
+  }
+  pumpSmart();
+}
+
+function scheduleStream(current) {
+  current.frame ??= requestAnimationFrame(() => {
+    current.frame = null;
+    flushStream(current);
+  });
+}
+
+function flushStream(current) {
+  if (!current.pending || smart !== current) return;
+  const [x, y] = current.pending;
+  current.pending = null;
+  try {
+    sendStream({ type: "point", stroke: current.id, x, y });
+  } catch (error) {
+    setHint(errorText(error));
+    cancelSmart();
+  }
+}
+
+function endStream(current) {
+  if (current.frame) cancelAnimationFrame(current.frame);
+  current.frame = null;
+  flushStream(current);
+  if (smart !== current) return;
+  try {
+    sendStream({ type: "end", stroke: current.id, class_id: state.class_id });
+  } catch (error) {
+    setHint(errorText(error));
+    cancelSmart();
+    return;
+  }
+  current.timeout = setTimeout(() => {
+    if (smart !== current) return;
+    setHint("The brush got no answer from the backend; the stroke was not saved.");
+    smart = null;
+    redraw();
+  }, STREAM_DONE_TIMEOUT_MS);
+}
+
+salus.channel("smartbrush", async (msg) => {
+  const message = msg.payload.asJson();
+  const current = smart;
+  if (!current || current.id !== message.stroke) return; // a stroke that was cancelled or timed out
+  if (message.type === "dabs") {
+    const dabs = await Promise.all(message.dabs.map(async (d) => ({ ...d, bitmap: await bitmapOf(d.png) })));
+    if (smart !== current) return;
+    current.dabs.push(...dabs);
+    redraw();
+  } else if (message.type === "done") {
+    clearTimeout(current.timeout);
+    try {
+      if (message.changed) await loadAnnotations();
+    } finally {
+      if (smart === current) smart = null; // the preview goes once the shapes are loaded
+      redraw();
+    }
+  } else if (message.type === "error") {
+    clearTimeout(current.timeout);
+    setHint(message.message);
+    if (smart === current) smart = null;
+    redraw();
+  }
+});
+
 async function bitmapOf(base64) {
   const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
   return createImageBitmap(new Blob([bytes], { type: "image/png" }));
@@ -761,8 +858,18 @@ async function commitSmart(current) {
 
 function cancelSmart() {
   if (!smart) return;
-  const id = smart.id;
+  const { id, streamed, timeout, frame } = smart;
   smart = null;
+  clearTimeout(timeout);
+  if (frame) cancelAnimationFrame(frame);
+  if (streamed) {
+    try {
+      sendStream({ type: "cancel", stroke: id });
+    } catch {
+      // the connection is gone: the backend drops the stroke when the viewer goes
+    }
+    return;
+  }
   api("POST", "/smartbrush/cancel", { json: { stroke: id } }).catch(() => undefined);
 }
 

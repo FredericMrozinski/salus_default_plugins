@@ -518,6 +518,38 @@ def border_setting(key, default=None):
         return default
 
 
+def new_stroke(sb, data: dict, x: float, y: float, frontend_id: int):
+    """A smart stroke starting at (x, y) (level 0), from the viewer's {image, mode, scale, inner, method}."""
+    if data.get("mode") not in ("paint", "erase"):
+        raise ViewerError("Unknown brush mode.")
+    image = data.get("image")
+    path = need_project().image_path(image)
+    stroke = stroke_class(sb, data.get("method"))(image, data["mode"], sb.check_scale(data.get("scale")), x, y,
+                                                   sb.check_inner(data.get("inner")))
+    stroke.slide = slides.open(str(path), frontend_id)  # the viewer has it open already
+    return stroke
+
+
+def commit_stroke(stroke, class_id) -> dict:
+    """Ends a stroke: paints its area with the class (merged into touching shapes of that class) or erases it."""
+    store = annotations_of(stroke.image)
+    with stroke.lock:
+        geometry = stroke.geometry()
+    if geometry is None:
+        return {"changed": 0, **store.summary()}
+    if stroke.mode == "erase":
+        changed = store.erase_area(geometry, hidden_classes())
+    else:
+        try:
+            class_id = int(class_id)
+        except (TypeError, ValueError):
+            raise ViewerError("Choose a class first.") from None
+        changed = int(store.add_area(geometry, class_id) is not None)
+        if changed:
+            reveal(class_id)
+    return {"changed": changed, **(changed_annotations(stroke.image, store) if changed else store.summary())}
+
+
 @app.route("POST", "/smartbrush/dab")
 @guarded
 def smart_dab(req):
@@ -535,13 +567,7 @@ def smart_dab(req):
     with lock:
         stroke = strokes.get(key)
         if stroke is None:
-            if data.get("mode") not in ("paint", "erase"):
-                raise ViewerError("Unknown brush mode.")
-            path = need_project().image_path(image)
-            stroke = stroke_class(sb, data.get("method"))(image, data["mode"], sb.check_scale(data.get("scale")), x, y,
-                                                           sb.check_inner(data.get("inner")))
-            stroke.slide = slides.open(str(path), req.frontend_id)  # the viewer has it open already
-            strokes[key] = stroke
+            stroke = strokes[key] = new_stroke(sb, data, x, y, req.frontend_id)
     if stroke.image != image:
         raise ViewerError("This stroke belongs to another image.", 409)
     with stroke.lock:
@@ -588,22 +614,7 @@ def smart_commit(req):
         stroke = strokes.pop((req.frontend_id, str(data.get("stroke"))), None)
     if stroke is None:
         raise ViewerError("No such stroke.", 404)
-    store = annotations_of(stroke.image)
-    with stroke.lock:
-        geometry = stroke.geometry()
-    if geometry is None:
-        return {"changed": 0, **store.summary()}
-    if stroke.mode == "erase":
-        changed = store.erase_area(geometry, hidden_classes())
-    else:
-        try:
-            class_id = int(data.get("class_id"))
-        except (TypeError, ValueError):
-            raise ViewerError("Choose a class first.") from None
-        changed = int(store.add_area(geometry, class_id) is not None)
-        if changed:
-            reveal(class_id)
-    return {"changed": changed, **(changed_annotations(stroke.image, store) if changed else store.summary())}
+    return commit_stroke(stroke, data.get("class_id"))
 
 
 @app.route("POST", "/smartbrush/cancel")
@@ -787,11 +798,105 @@ def export_cancel(req):
     return {}
 
 
+# --------------------------------------------------------------------------- streamed strokes
+#
+# The brush over a channel instead of one HTTP request per batch: the viewer sends the stroke's points as the pointer
+# moves, without waiting, and the dabs come back as soon as each point is done. Over a slow connection (a remote server,
+# a proxy in front) the painting then follows the brush one round trip behind, smoothly, instead of in jumps of one round
+# trip each. Messages on ws://smartbrush, all {type, stroke}:
+#
+#   viewer -> backend   start {image, mode, scale, inner, method, x, y} | point {x, y} | end {class_id} | cancel
+#   backend -> viewer   dabs {dabs} | done {changed, ...annotations summary} | error {message}
+#
+# Channel handlers run concurrently; this one only queues the message (synchronously, so in the order the messages
+# came), and one worker thread per stroke works through its queue in order: points, then the commit at `end`.
+
+STREAM_IDLE_SECONDS = 120  # a stroke whose viewer sends nothing for this long is dropped (the page went away)
+stream_lock = threading.Condition()
+stream_queues: dict[tuple[int, str], list] = {}  # (frontend id, stroke id) -> messages not handled yet
+
+
+@app.channel("smartbrush")
+async def smart_stream(msg):
+    try:
+        data = msg.payload.as_json()
+    except ValueError:
+        return
+    if not isinstance(data, dict):
+        return
+    key = (msg.sender, str(data.get("stroke")))  # the sending frontend (the viewer)
+    with stream_lock:
+        queue = stream_queues.get(key)
+        if queue is None:
+            if data.get("type") != "start":
+                return  # a late message of a stroke that has ended
+            queue = stream_queues[key] = []
+            threading.Thread(target=stream_worker, args=(key,), name=f"stroke-{key[1][:8]}", daemon=True).start()
+        queue.append(data)
+        stream_lock.notify_all()
+
+
+def stream_send(frontend_id: int, stroke_id: str, message: dict) -> None:
+    try:
+        app.send_blocking(salus.Payload.json({"stroke": stroke_id, **message}), channel="smartbrush", to=frontend_id)
+    except Exception as e:  # the viewer went away
+        log.debug("smartbrush stream: %s", e)
+
+
+def stream_worker(key: tuple[int, str]) -> None:
+    frontend_id, stroke_id = key
+    stroke = None
+    try:
+        while True:
+            with stream_lock:
+                if not stream_lock.wait_for(lambda: stream_queues.get(key), timeout=STREAM_IDLE_SECONDS):
+                    return
+                messages, stream_queues[key] = stream_queues[key], []
+            # Points waiting behind others: only the newest matters for where the stroke goes (the dabs are placed
+            # along the way from the last one anyway), so a slow server catches up instead of falling further behind.
+            kinds = [m.get("type") for m in messages]
+            for i, data in enumerate(messages):
+                kind = data.get("type")
+                if kind == "point" and "point" in kinds[i + 1:i + 2]:
+                    continue
+                if kind == "cancel":
+                    return
+                if kind == "start":
+                    sb = smartbrush_module()
+                    x, y = float(data["x"]), float(data["y"])
+                    with lock:
+                        stroke = new_stroke(sb, data, x, y, frontend_id)
+                if stroke is None:
+                    continue
+                if kind in ("start", "point"):
+                    with stroke.lock:
+                        dabs = stroke.to_dab(sb.slide_reader(stroke.slide), float(data["x"]), float(data["y"]))
+                    if dabs:
+                        stream_send(frontend_id, stroke_id, {"type": "dabs", "dabs": dabs})
+                elif kind == "end":
+                    stream_send(frontend_id, stroke_id, {"type": "done", **commit_stroke(stroke, data.get("class_id"))})
+                    return
+    except ViewerError as e:
+        stream_send(frontend_id, stroke_id, {"type": "error", "message": str(e)})
+    except (KeyError, TypeError, ValueError):
+        stream_send(frontend_id, stroke_id, {"type": "error", "message": "Invalid brush message."})
+    except Exception as e:  # noqa: BLE001 - the viewer is told, the backend goes on
+        log.exception("smartbrush stream failed")
+        stream_send(frontend_id, stroke_id, {"type": "error", "message": f"The brush failed: {e}"})
+    finally:
+        with stream_lock:
+            stream_queues.pop(key, None)
+
+
 @app.on_frontend_detached
 async def detached(frontend_id):
     with lock:
         for key in [k for k in strokes if k[0] == frontend_id]:
             del strokes[key]
+    with stream_lock:
+        for key in [k for k in stream_queues if k[0] == frontend_id]:
+            stream_queues[key].append({"type": "cancel"})
+        stream_lock.notify_all()
     await asyncio.to_thread(slides.release, frontend_id)
 
 

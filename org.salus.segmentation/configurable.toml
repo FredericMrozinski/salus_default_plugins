@@ -41,3 +41,12 @@ of the neighbours decides), and the pixel staircase, which shows when you zoom i
 curve. Off: the outline follows the pixels exactly. Applies to the next stroke."""
 type = "bool"
 default = true
+
+[[setting]]
+key = "border_stream"
+name = "Border growth: stream over the connection"
+description = """The viewer sends the brush's path to the backend as you paint, without waiting for answers, and the painting \
+comes back as soon as each part is done, so over a slow connection (a remote server) it follows the brush smoothly instead \
+of in jumps. Off: one request at a time, as before. Applies to the next stroke (after the viewer was shown again)."""
+type = "bool"
+default = true
