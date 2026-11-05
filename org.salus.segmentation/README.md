@@ -7,7 +7,7 @@ Polygon annotation of whole slide images in **annotation projects**, with export
 | `browser` (entry) | left | Chooses the project (the picker at the top; **+** creates one, the folder button opens one) and lists its images with their folder and status, filtered by name and status. Clicking an image opens it. Opens the viewer, tools and classes; **Export**, **Statuses** and, under **⋯**, **Project information** (folders and file types) and **Import from QuPath** are here too. |
 | `viewer` | center | The image (OpenSlide or Pillow tiles in OpenSeadragon) with the annotations drawn on top. |
 | `tools` | bottom | The mode (Exact or a smart one); Pan, Brush, Eraser, Polygon; the tool width; undo / redo; the class being drawn. |
-| `classes` | right | The project's classes, with their numbers of shapes in the open image and a hide button. Click one to draw with it. The fill opacity of the shapes is at the bottom. |
+| `classes` | right | The project's classes, with their numbers of shapes in the open image and a hide button. Click one to draw with it. **Hide annotations** at the bottom hides all shapes while held down. |
 | `export` | center | Exports pixel maps (see below). |
 
 ## Projects
@@ -25,10 +25,24 @@ exported the same way. The images are only read. Everything the plugin writes go
 Open an existing project with the folder button and its save folder. The list of known projects is kept in `~/.salus/segmentation-projects.json`
 (plugin settings are for settings, not data). Projects cannot be removed from the list in the browser for now.
 
+**Images without a pyramid.** An image whose smallest level is still larger than 4096 px (no pyramid, or one that stops too
+early; a picture read by Pillow has a single level) has to be read once at full resolution before it can be shown zoomed
+out, which takes minutes for a large one. Before opening, the viewer asks the backend (`GET /slide/check?image=`, from
+the file's metadata only); for such an image over 100 megapixels (`WARN_PIXELS`) that is not open already, it says that the
+image has no pyramidal image structure, that opening it can take a few minutes and that the Pharaoh plugin can add one,
+and opens it only on **Open anyway** (kept for that image while the page is open). After **Cancel**, the viewer offers
+"open it anyway" in its place.
+
 ## Classes
 
 Each class has a **name** and a **drawing color** (how it looks while annotating); both can be changed at any time. Classes cannot be
 deleted. The colors of exported pixel maps are chosen when exporting.
+
+**Hide annotations** at the bottom of the class editor hides all shapes in the viewer, outlines included, **while it is
+held down** (it is no switch: a short click says so), to see the tissue under them; holding the **H** key does the same (in
+the viewer at once, in the other panels through the backend: `ws://hide`, broadcast as `{type: "hide", on}`). The brush and
+the stroke being drawn stay visible. How strongly the shapes are filled is a setting of the plugin, **Annotation fill**
+(`fill_opacity`, 0 to 100 %, default 35; Settings, Segmentation); the viewer takes a change when it is shown again.
 
 The class editor shows how many shapes of each class the open image has, and an eye button per class that **hides** its
 shapes in the viewer. Hidden shapes are left alone by the eraser (so nothing is erased that cannot be seen), and drawing

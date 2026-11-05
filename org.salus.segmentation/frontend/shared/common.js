@@ -1,5 +1,5 @@
 // Shared by the four components: the Salus connection, small DOM helpers, the shared state and its events.
-import { Salus } from "./salus_sdk.js";
+import { Payload, Salus } from "./salus_sdk.js";
 
 export const salus = Salus.connect();
 
@@ -53,6 +53,30 @@ export function followState(render) {
 }
 
 export const setState = (changes) => api("PUT", "/state", { json: changes });
+
+// Hold to hide (backend/plugin.py): while "Hide annotations" or the H key is held down, the viewer hides the shapes. The
+// panel tells the backend when it is pressed and released, and every panel hears {type: "hide", on} on "events".
+let hideHeld = false;
+
+export function setHideHeld(on) {
+  if (on === hideHeld) return;
+  hideHeld = on;
+  try {
+    salus.send("hide", Payload.json({ on }));
+  } catch (error) {
+    console.warn("hide:", error);
+  }
+}
+
+/** Holding H (without a modifier, not while typing) hides the annotations; releasing it, or leaving the page, shows them. */
+export function watchHideKey() {
+  const typing = (event) => event.target.closest?.("input, textarea, select, [contenteditable]");
+  window.addEventListener("keydown", (event) => {
+    if (event.key.toLowerCase() === "h" && !event.repeat && !event.metaKey && !event.ctrlKey && !event.altKey && !typing(event)) setHideHeld(true);
+  });
+  window.addEventListener("keyup", (event) => event.key.toLowerCase() === "h" && setHideHeld(false));
+  window.addEventListener("blur", () => setHideHeld(false));
+}
 
 export function modal(title, content, buttons) {
   const backdrop = h("div", { class: "backdrop" },

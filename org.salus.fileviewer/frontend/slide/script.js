@@ -26,6 +26,18 @@ if (!file) {
     throw new Error("no file parameter");
 }
 
+// A slide without a (complete) pyramid has to be read at full resolution once before it can be shown zoomed out, which
+// takes minutes for a large one: the backend says so from the file's metadata (GET /slide/check), and the user decides.
+const check = await salus.http.json("GET", "/slide/check", { query: { file } }).catch(() => null);
+if (check?.warn) {
+    statusEl.textContent = "Waiting for your answer…";
+    if (!(await askToOpen(check))) {
+        statusEl.textContent = "Not opened: this slide has no pyramidal image structure. Add one with the Pharaoh plugin, then open it again.";
+        throw new Error("not opened");
+    }
+    statusEl.textContent = "Opening the slide; this can take a few minutes…";
+}
+
 try {
     slide = await salus.http.json("GET", "/slide/info", { query: { file } });
 } catch (error) {
@@ -58,3 +70,41 @@ render();
 // Neither the viewer nor its tiles offer a way to save the slide.
 document.getElementById("viewer").addEventListener("contextmenu", (e) => e.preventDefault());
 render();
+
+
+/** Asks whether to open a slide without a pyramid anyway. Resolves true (open) or false. */
+function askToOpen(check) {
+    const size = `${check.width.toLocaleString()} × ${check.height.toLocaleString()} px`;
+    const levels = check.levels > 1 ? `its smallest level is still ${check.smallest[0].toLocaleString()} px wide` : "it has a single level";
+    return new Promise((resolve) => {
+        const open = el("button", { className: "primary", textContent: "Open anyway" });
+        const cancel = el("button", { textContent: "Cancel" });
+        const backdrop = el("div", { className: "backdrop" },
+            el("div", { className: "dialog", role: "dialog", "aria-modal": "true" },
+                el("header", { textContent: "No pyramidal image structure" }),
+                el("div", { className: "content" },
+                    el("p", { textContent: `This slide (${size}) has no pyramidal image structure: ${levels}. Opening it can take a few minutes.` }),
+                    el("p", { textContent: "Instead, a pyramidal structure can be added with the Pharaoh plugin; the slide then opens at once." }),
+                    el("p", { textContent: "Would you still like to proceed and open the file?" })),
+                el("footer", {}, cancel, open)));
+        const done = (answer) => {
+            backdrop.remove();
+            resolve(answer);
+        };
+        open.addEventListener("click", () => done(true));
+        cancel.addEventListener("click", () => done(false));
+        backdrop.addEventListener("keydown", (event) => event.key === "Escape" && done(false));
+        document.body.append(backdrop);
+        cancel.focus();
+    });
+}
+
+function el(tag, props = {}, ...children) {
+    const node = document.createElement(tag);
+    for (const [key, value] of Object.entries(props)) {
+        if (key.includes("-")) node.setAttribute(key, value);
+        else node[key] = value;
+    }
+    node.append(...children);
+    return node;
+}

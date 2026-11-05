@@ -118,3 +118,66 @@ class SlidesTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LevelsSlide:
+    """An OpenSlide handle with the given level sizes (metadata only)."""
+
+    def __init__(self, levels):
+        self.level_dimensions = levels
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+class PyramidCheckTest(unittest.TestCase):
+    """GET /slide/check: slides without a (complete) pyramid are slow to open; the viewer asks first."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.file = Path(self.tmp.name) / "a.svs"
+        self.file.write_bytes(b"x")
+        self.original = slides.openslide.OpenSlide
+
+    def tearDown(self):
+        slides.openslide.OpenSlide = self.original
+        self.tmp.cleanup()
+
+    def check(self, levels):
+        handles = []
+        slides.openslide.OpenSlide = lambda path: handles.append(LevelsSlide(levels)) or handles[-1]
+        result = slides.Slides().check(str(self.file))
+        self.assertTrue(handles[0].closed, "the file is let go of again")
+        return result
+
+    def test_a_pyramid_opens_without_asking(self):
+        result = self.check([(100_000, 80_000), (25_000, 20_000), (6_250, 5_000), (1_562, 1_250)])
+        self.assertEqual((result["pyramid"], result["warn"], result["levels"]), (True, False, 4))
+
+    def test_a_large_slide_without_a_pyramid_warns(self):
+        result = self.check([(40_000, 30_000)])
+        self.assertEqual((result["pyramid"], result["warn"]), (False, True))
+        self.assertEqual((result["width"], result["height"], result["smallest"]), (40_000, 30_000, [40_000, 30_000]))
+
+    def test_a_pyramid_that_stops_too_early_warns(self):
+        result = self.check([(100_000, 80_000), (25_000, 20_000)])  # the smallest level is still 25k px wide
+        self.assertEqual((result["pyramid"], result["warn"]), (False, True))
+
+    def test_a_small_slide_without_a_pyramid_does_not(self):
+        result = self.check([(9_000, 9_000)])  # 81 MP: read quickly
+        self.assertEqual((result["pyramid"], result["warn"]), (False, False))
+        self.assertEqual(self.check([(4_000, 3_000)])["pyramid"], True)
+
+    def test_an_open_slide_does_not_warn_again(self):
+        manager = slides.Slides()
+        slide = bare_slide(self.file)
+        manager._by_path[str(self.file)] = slide
+        slides.openslide.OpenSlide = lambda path: LevelsSlide([(40_000, 30_000)])
+        self.assertFalse(manager.check(str(self.file))["warn"])
+
+    def test_only_slide_files(self):
+        other = Path(self.tmp.name) / "notes.txt"
+        other.write_text("x")
+        with self.assertRaises(ViewerError):
+            slides.Slides().check(str(other))

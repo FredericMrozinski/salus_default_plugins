@@ -47,3 +47,6 @@ button.primary.danger { background: var(--salus-danger, #e5484d); }
 .label { font-size: 12px; color: var(--salus-fg-muted, #a9adba); }
 .value { font-size: 12px; font-variant-numeric: tabular-nums; min-width: 38px; text-align: right; }
 .note { font-size: 12px; color: var(--salus-warning, #f5a524); }
+.foot .hold { flex: 1; user-select: none; touch-action: none; }
+.foot .hold.on { background: var(--salus-accent, #3a6df0); color: var(--salus-accent-fg, #fff); border-color: transparent; }
+.foot .hint { font-size: 11px; color: var(--salus-fg-muted, #a9adba); }

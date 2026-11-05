@@ -1,12 +1,14 @@
 // The annotation pane (center): the image in OpenSeadragon, and a canvas on top that draws the annotations and the
 // shape being drawn. Tools and classes are shared state (chosen in the tools and class panels); the drawn shapes go to the
 // backend, which keeps them as GeoJSON in image pixel coordinates.
-import { api, fileName, followState, message as errorText, onEvent, salus, setState } from "../shared/common.js";
+import { api, fileName, followState, h, message as errorText, modal, onEvent, salus, setState } from "../shared/common.js";
 import { Payload } from "../shared/salus_sdk.js";
 import { createViewer, zoomPercent } from "../shared/osd.js";
 
 const container = document.getElementById("viewer");
 const messageEl = document.getElementById("message");
+let hideHeldHere = false; // H held down in this panel (see "Hold to hide" below)
+let hideHeldElsewhere = false; // "Hide annotations" or H held in another panel
 const statusEl = document.getElementById("status");
 
 let state = null;
@@ -131,11 +133,52 @@ function closeImage(text) {
   renderStatus();
 }
 
+// A slide without a (complete) pyramid has to be read at full resolution once before it can be shown zoomed out, which
+// takes minutes for a large one: the backend says so from the file's metadata (GET /slide/check), and the user decides.
+// The answer "open" is kept for the image while the page is open.
+const openAnyway = new Set();
+
+function askToOpen(path, check) {
+  const size = `${check.width.toLocaleString()} × ${check.height.toLocaleString()} px`;
+  const levels = check.levels > 1 ? `its smallest level is still ${check.smallest[0].toLocaleString()} px wide` : "it has a single level";
+  return new Promise((resolve) => {
+    let close;
+    const answer = (value) => {
+      close();
+      resolve(value);
+    };
+    const cancel = h("button", { onclick: () => answer(false) }, "Cancel");
+    close = modal("No pyramidal image structure", [
+      h("p", {}, `${fileName(path)} (${size}) has no pyramidal image structure: ${levels}. Opening it can take a few minutes.`),
+      h("p", {}, "Instead, a pyramidal structure can be added with the Pharaoh plugin; the image then opens at once."),
+      h("p", {}, "Would you still like to proceed and open the file?"),
+    ], [cancel, h("button", { class: "primary", onclick: () => answer(true) }, "Open anyway")]);
+    document.querySelector(".backdrop")?.addEventListener("keydown", (event) => event.key === "Escape" && answer(false));
+    cancel.focus();
+  });
+}
+
 async function openImage(path) {
   closeImage(path ? "Loading…" : "Choose an image in the image browser.");
   if (!path) return;
   const token = openToken;
   image = path;
+  if (!openAnyway.has(path)) {
+    const check = await api("GET", "/slide/check", { query: { image: path } }).catch(() => null);
+    if (token !== openToken) return;
+    if (check?.warn) {
+      if (!(await askToOpen(path, check))) {
+        if (token !== openToken) return;
+        messageEl.replaceChildren(h("div", {}, `${fileName(path)} has no pyramidal image structure and was not opened. Add one with the Pharaoh plugin, or `,
+          h("button", { onclick: () => { openAnyway.add(path); openImage(path); } }, "open it anyway"), " (can take a few minutes)."));
+        messageEl.className = "message";
+        return;
+      }
+      if (token !== openToken) return;
+      openAnyway.add(path);
+      messageEl.textContent = "Opening the image; this can take a few minutes…";
+    }
+  }
   let slide;
   try {
     slide = await api("GET", "/slide/info", { query: { image: path } });
@@ -247,11 +290,12 @@ function draw() {
   const opacity = state?.opacity ?? 0.35;
   const [vx0, vy0] = toImage(0, 0, t), [vx1, vy1] = toImage(width, height, t);
   const hidden = new Set(state?.hidden ?? []); // classes hidden in the class editor
+  const hideAll = hideHeldHere || hideHeldElsewhere; // "Hide annotations" or H held down: no shapes, no outlines
 
   // The shapes, in image coordinates.
   ctx.setTransform(dpr * t.s, 0, 0, dpr * t.s, dpr * t.ox, dpr * t.oy);
   ctx.lineJoin = "round";
-  for (const shape of shapes) {
+  for (const shape of hideAll ? [] : shapes) {
     if (hidden.has(shape.class_id)) continue;
     const [x0, y0, x1, y1] = shape.bbox;
     if (x1 < vx0 || x0 > vx1 || y1 < vy0 || y0 > vy1) continue;
@@ -884,3 +928,27 @@ async function history(which) {
 }
 
 window.addEventListener("resize", redraw);
+
+// Hold to hide (backend/plugin.py): H held down here hides the shapes at once (no round trip); "Hide annotations" in the
+// class editor, or H in another panel, arrives as {type: "hide", on} on "events".
+const typingIn = (event) => event.target.closest?.("input, textarea, select, [contenteditable]");
+window.addEventListener("keydown", (event) => {
+  if (event.key.toLowerCase() !== "h" || event.repeat || event.metaKey || event.ctrlKey || event.altKey || typingIn(event)) return;
+  hideHeldHere = true;
+  redraw();
+});
+window.addEventListener("keyup", (event) => {
+  if (event.key.toLowerCase() !== "h" || !hideHeldHere) return;
+  hideHeldHere = false;
+  redraw();
+});
+window.addEventListener("blur", () => {
+  if (!hideHeldHere) return;
+  hideHeldHere = false;
+  redraw();
+});
+onEvent((event) => {
+  if (event.type !== "hide") return;
+  hideHeldElsewhere = !!event.on;
+  redraw();
+});

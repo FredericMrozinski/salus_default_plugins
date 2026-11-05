@@ -24,3 +24,13 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
 }
+
+.backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, .45); display: grid; place-items: center; z-index: 20; padding: 12px; }
+.dialog { background: var(--salus-surface, #1b1e25); color: var(--salus-fg, #cfd3dc); border: 1px solid var(--salus-border, #2a2d35);
+          border-radius: 8px; width: min(480px, 100%); box-shadow: 0 10px 40px rgba(0, 0, 0, .4); font-size: 13px; }
+.dialog > header { padding: 10px 14px; font-weight: 600; border-bottom: 1px solid var(--salus-border, #2a2d35); }
+.dialog > .content { padding: 4px 14px; line-height: 1.45; }
+.dialog > footer { padding: 10px 14px; border-top: 1px solid var(--salus-border, #2a2d35); display: flex; gap: 8px; justify-content: flex-end; }
+.dialog button { font: inherit; padding: 4px 12px; border-radius: 6px; border: 1px solid var(--salus-border, #2a2d35);
+                 background: var(--salus-surface-2, #23262e); color: inherit; cursor: pointer; }
+.dialog button.primary { background: var(--salus-accent, #3a6df0); color: var(--salus-accent-fg, #fff); border-color: transparent; }

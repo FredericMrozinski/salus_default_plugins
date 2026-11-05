@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """File viewer backend: one backend for the slide, image, table, PDF and text viewers.
 
-  slide  GET /slide/info?file=, GET /slide/tiles/{slide}/{level}/{tile}   (slides.py: whole slide images, OpenSlide)
+  slide  GET /slide/check?file= (no pyramid?), GET /slide/info?file=, GET /slide/tiles/{slide}/{level}/{tile}   (slides.py)
   image  GET /image/info?file=, GET /image/tiles/{id}/{level}/{tile}      (pictures.py: png, jpeg, ... rendered by Pillow)
   table  GET /table/open?file=, GET /table/rows?file=&table=...           (tables.py)
          /table/edit/...                                                  (table_edit.py: editing CSV and TSV files)
@@ -48,6 +48,15 @@ def file_arg(req) -> str:
 # --------------------------------------------------------------------------- slide (whole slide images)
 
 slides = Slides()
+
+
+@app.route("GET", "/slide/check")
+async def slide_check(req):
+    """Whether opening the slide will take long (no pyramid, large): the viewer asks the user first. Metadata only."""
+    try:
+        return salus.Response.json(await asyncio.to_thread(slides.check, file_arg(req)), headers=NO_CACHE)
+    except ViewerError as e:
+        raise salus.HTTPError(e.status, str(e)) from None
 
 
 @app.route("GET", "/slide/info")

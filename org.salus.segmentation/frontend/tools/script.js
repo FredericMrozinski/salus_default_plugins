@@ -1,7 +1,9 @@
 // The annotation tools (bottom panel): pan, brush, eraser and polygon, the mode (Exact, or a smart mode that turns the
-// last three into versions that follow the image), the tool width, the fill opacity, and undo/redo.
+// last three into versions that follow the image), the tool width and undo/redo.
 // The choice is shared state, so the viewer follows it.
-import { api, followState, h, message, onEvent, setState } from "../shared/common.js";
+import { api, followState, h, message, onEvent, setState, watchHideKey } from "../shared/common.js";
+
+watchHideKey(); // H held down hides the annotations (see shared/common.js)
 
 const app = document.getElementById("app");
 let history = { can_undo: false, can_redo: false };

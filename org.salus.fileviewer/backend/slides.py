@@ -40,6 +40,9 @@ PREWARM_MAX_TILES_PER_LEVEL = 64  # overview levels are rendered when a slide is
 MAX_DIRECT_READ = 4096  # px per side that may be read from a slide level for one tile; larger reads use the overview
 OVERVIEW_REDUCTION = 16  # the overview is this much smaller than level 0
 OVERVIEW_BLOCK = 4096  # level-0 pixels per side of the blocks the overview is read in
+# A slide whose overview has to be built (no level small enough: no pyramid, or one that stops too early) and that has
+# more level-0 pixels than this takes long to open: the viewer asks first (`Slides.check`).
+WARN_PIXELS = 100_000_000
 SLIDE_SUFFIXES = {".svs", ".tif", ".tiff", ".ndpi", ".scn", ".mrxs", ".vms", ".vmu", ".bif"}
 TILE_NAME = re.compile(r"^(\d+)_(\d+)\.jpeg$")
 
@@ -246,6 +249,32 @@ class Slides:
             self._by_path[str(path)] = slide
             log.info("Opened %s: %dx%d px, %d deep zoom levels", path.name, *slide.slide.dimensions, slide.dz.level_count)
             return slide
+
+    def check(self, file: str) -> dict:
+        """Whether opening a file will take long, read from its metadata only (nothing is decoded):
+        {pyramid, levels, width, height, smallest, warn}. `pyramid` is False when even the smallest level is larger than
+        MAX_DIRECT_READ (the overview has to be read from the full resolution, see `overview`); `warn` when that is so and
+        the slide is large (WARN_PIXELS) and not open already."""
+        if openslide is None:
+            raise ViewerError(f"The slide viewer needs OpenSlide, which is not installed ({IMPORT_ERROR}). Run backend/setup.sh.", 503)
+        path = Path(file).expanduser()
+        if path.suffix.lower() not in SLIDE_SUFFIXES or not path.is_file():
+            raise ViewerError("That is not a slide file on the server.", 404)
+        with self._lock:
+            opened = self._by_path.get(str(path))
+            already = opened is not None and opened.id == _slide_id(path)
+        try:
+            slide = openslide.OpenSlide(str(path))
+        except openslide.OpenSlideError:
+            return {"pyramid": True, "levels": 0, "width": 0, "height": 0, "smallest": None, "warn": False}  # open() says why
+        try:
+            levels = [tuple(size) for size in slide.level_dimensions]
+        finally:
+            slide.close()
+        width, height = levels[0]
+        pyramid = max(levels[-1]) <= MAX_DIRECT_READ
+        return {"pyramid": pyramid, "levels": len(levels), "width": width, "height": height, "smallest": list(levels[-1]),
+                "warn": not pyramid and width * height > WARN_PIXELS and not already}
 
     def release(self, viewer: int) -> None:
         """A viewer was closed: slides that nobody else has open are closed and their tiles dropped."""

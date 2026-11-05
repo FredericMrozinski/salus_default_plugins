@@ -2,9 +2,10 @@
 // image and a button that hides its shapes in the viewer. Click a class to draw with it. The arrow in front of a class
 // lists its shapes in the open image, each with a small picture of its outline and its name (generic, "Tumor 3", until
 // it is renamed); clicking one shows it in the middle of the viewer.
-// The fill opacity of the shapes is set at the bottom.
+// At the bottom: "Hide annotations", held down to see the tissue under the shapes (also the H key). How strongly the
+// shapes are filled is a setting of the plugin (Settings, "Annotation fill").
 // Name and drawing color can be changed; classes are never deleted. Colors of exported pixel maps are chosen in the export view.
-import { api, followState, h, message, modal, onEvent, setState } from "../shared/common.js";
+import { api, followState, h, message, modal, onEvent, setHideHeld, setState, watchHideKey } from "../shared/common.js";
 
 const app = document.getElementById("app");
 let editing = null; // id of the class being renamed
@@ -237,7 +238,6 @@ function render(state) {
     });
     return [row, h("div", { class: "shapes" + (hidden ? " hidden" : "") }, items)];
   });
-  const opacityValue = h("span", { class: "value" }, `${Math.round(state.opacity * 100)} %`);
   const scroll = app.querySelector(".list")?.scrollTop ?? 0;
   if (menu && !shapes?.includes(menu.shape)) menu = null; // the shapes were reloaded
   const contextMenu = menu && h("div", { class: "menu", role: "menu", style: `left:${menu.x}px;top:${menu.y}px`, onkeydown: (e) => e.key === "Escape" && closeMenu() },
@@ -248,12 +248,7 @@ function render(state) {
     h("div", { class: "head" }, h("strong", {}, "Classes"), h("button", { onclick: () => addDialog(project) }, "+ Add")),
     list,
     error && h("div", { class: "empty error" }, error),
-    h("div", { class: "foot", title: "How strongly shapes are filled" },
-      h("span", { class: "label" }, "Fill"),
-      h("input", { type: "range", min: 0, max: 100, value: Math.round(state.opacity * 100),
-        oninput: (e) => (opacityValue.textContent = `${e.target.value} %`),
-        onchange: (e) => setState({ opacity: Number(e.target.value) / 100 }).catch(show) }),
-      opacityValue),
+    h("div", { class: "foot" }, hideButton(), hideHint && h("span", { class: "hint" }, hideHint)),
     contextMenu || "");
   if (contextMenu) { // keep it inside the panel
     const box = contextMenu.getBoundingClientRect();
@@ -317,4 +312,43 @@ function addDialog(project) {
     problem,
   ], [h("button", { onclick: () => close() }, "Cancel"), add]);
   name.focus();
+}
+
+
+// --------------------------------------------------------------------------- hold to hide
+
+const HOLD_MS = 300; // a press shorter than this is a click: the annotations would only flicker, so say how it works
+let pressedAt = null;
+let hideHint = "";
+let hintTimer = null;
+watchHideKey();
+
+function hideButton() {
+  return h("button", {
+    class: "hold" + (pressedAt !== null ? " on" : ""),
+    title: "Hides the annotations, outlines included, while you hold it down (or hold H)",
+    onpointerdown: (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      pressedAt = performance.now();
+      event.currentTarget.classList.add("on");
+      setHideHeld(true);
+      // released anywhere (the panel may redraw meanwhile): listen on the window
+      window.addEventListener("pointerup", releaseHide, { once: true });
+      window.addEventListener("pointercancel", releaseHide, { once: true });
+    },
+  }, "Hide annotations");
+}
+
+function releaseHide() {
+  if (pressedAt === null) return;
+  const held = performance.now() - pressedAt;
+  pressedAt = null;
+  setHideHeld(false);
+  window.removeEventListener("pointerup", releaseHide);
+  window.removeEventListener("pointercancel", releaseHide);
+  clearTimeout(hintTimer);
+  hideHint = held < HOLD_MS ? "Hold the button down to keep the annotations hidden." : "";
+  render(shared.get());
+  if (hideHint) hintTimer = setTimeout(() => { hideHint = ""; render(shared.get()); }, 3000);
 }

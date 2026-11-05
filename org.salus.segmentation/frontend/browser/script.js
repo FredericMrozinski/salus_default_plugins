@@ -1,7 +1,9 @@
 // The dataset browser (left panel): chooses the project and lists its images. It is the plugin's entry component and
 // opens the other three: the viewer (center), the tools (bottom) and the classes (right).
-import { api, dirName, fileName, followState, h, message, modal, onEvent, salus, setState } from "../shared/common.js";
+import { api, dirName, fileName, followState, h, message, modal, onEvent, salus, setState, watchHideKey } from "../shared/common.js";
 import { pickFolder } from "../shared/picker.js";
+
+watchHideKey(); // H held down hides the annotations (see shared/common.js)
 
 const app = document.getElementById("app");
 let images = []; // [{path, shapes}]
