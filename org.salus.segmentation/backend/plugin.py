@@ -5,14 +5,16 @@ The four components (browser, viewer, tools, classes) share one state, kept here
 selected class and tool. Every change is broadcast on the "events" channel, and each component redraws what concerns it.
 
   GET  /state                                  projects, the open project and the shared state
-  PUT  /state {image?, class_id?, tool?, mode?, brush?, opacity?, hidden?, sensitivity?}   sensitivity: Border growth's colours
+  PUT  /state {image?, class_id?, tool?, mode?, brush?, hidden?, sensitivity?}   sensitivity: Border growth's colours
+                                               (the fill opacity in the state is the `fill_opacity` setting)
+  ws://hide {on}                               hold-to-hide: broadcast on "events" as {type: "hide", on} (see below)
   POST /projects {name, root, extensions, save} | /projects/open {save} | /projects/{id}/use | /projects/{id}/forget
   GET  /fs?path=                               server folders, for choosing the root and save folders
   GET  /images?rescan=1                        the images of the open project, with their shape counts and statuses
   POST /images/remove {images}  GET /images/removed  POST /images/restore {images}   (the files stay)
   PUT  /images/status {image | images, status} PUT /statuses {statuses: [{id?, name, color}]}
   POST /classes {name, color}                  PATCH /classes/{id} {name?, color?}
-  GET  /slide/info?image=  GET /slide/tiles/{slide}/{level}/{tile}
+  GET  /slide/check?image= (no pyramid?)  GET /slide/info?image=  GET /slide/tiles/{slide}/{level}/{tile}
   GET  /annotations?image=                     GeoJSON          GET /annotations/summary?image= (shapes per class)
   POST /annotations/polygon {image, class_id, points, simplify}
   POST /annotations/paint {image, points, radius, class_id}  /annotations/erase {image, points, radius}
@@ -77,7 +79,7 @@ annotation_cache: dict[str, Annotations] = {}
 shape_counts: dict[str, int] = {}
 # brush: the tool width in screen pixels (brush and eraser diameter; twice the smart tools' inner radius)
 # hidden: ids of the classes whose shapes the viewer does not show (and the eraser leaves alone)
-state = {"image": None, "class_id": None, "tool": "pan", "mode": "exact", "brush": 32, "opacity": 0.35, "hidden": [],
+state = {"image": None, "class_id": None, "tool": "pan", "mode": "exact", "brush": 32, "hidden": [],
          "sensitivity": "normal"}  # sensitivity: Border growth's colours, "normal" or "strict" (see borderbrush)
 
 
@@ -125,7 +127,21 @@ def full_state() -> dict:
         known = []
         for entry in registry.load():
             known.append({**entry, "missing": not (Path(entry["save"]) / "project.json").is_file()})
-        return {"projects": known, "project": project.info() if project else None, "modes": MODE_LIST, **state}
+        return {"projects": known, "project": project.info() if project else None, "modes": MODE_LIST, **state,
+                "opacity": fill_opacity()}
+
+
+def fill_opacity() -> float:
+    """The `fill_opacity` setting (percent) as 0 ... 1: how strongly the viewer fills the shapes."""
+    try:
+        value = app.config.get_blocking("fill_opacity", 35)
+    except Exception as e:  # noqa: BLE001 - not readable (e.g. while the plugin starts): the default
+        log.debug("fill_opacity not read: %s", e)
+        value = 35
+    try:
+        return max(0.0, min(1.0, float(value) / 100))
+    except (TypeError, ValueError):
+        return 0.35
 
 
 def use_project(p: Project) -> None:
@@ -197,8 +213,6 @@ def put_state(req):
             if data["sensitivity"] not in ("normal", "strict"):
                 raise ViewerError("Unknown sensitivity.")
             state["sensitivity"] = data["sensitivity"]
-        if "opacity" in data:
-            state["opacity"] = max(0.0, min(1.0, float(data["opacity"])))
         if "hidden" in data:
             if not isinstance(data["hidden"], list):
                 raise ViewerError("Give the hidden classes as a list.")
@@ -389,6 +403,16 @@ def rewrite_annotation_files(p: Project) -> None:
 
 
 # --------------------------------------------------------------------------- the image itself
+
+@app.route("GET", "/slide/check")
+async def slide_check(req):
+    """Whether opening the image will take long (no pyramid, large): the viewer asks the user first. Metadata only."""
+    try:
+        path = need_project().image_path(req.query.get("image", ""))
+        return salus.Response.json(await asyncio.to_thread(slides.check, str(path)), headers=NO_CACHE)
+    except ViewerError as e:
+        raise salus.HTTPError(e.status, str(e)) from None
+
 
 @app.route("GET", "/slide/info")
 async def slide_info(req):
@@ -888,8 +912,36 @@ def stream_worker(key: tuple[int, str]) -> None:
             stream_queues.pop(key, None)
 
 
+# --------------------------------------------------------------------------- hold to hide the annotations
+#
+# "Hide annotations" in the class editor (and the H key) hides the shapes while it is held down. The panel sends
+# ws://hide {on} when it is pressed and released; every panel hears it on "events" as {type: "hide", on}. It is no
+# shared state: nothing is kept but who holds it, so that a panel that goes away while holding lets go.
+
+hide_holders: set[int] = set()
+
+
+@app.channel("hide")
+async def hide(msg):
+    try:
+        on = bool(msg.payload.as_json().get("on"))
+    except (ValueError, AttributeError):
+        return
+    was = bool(hide_holders)
+    (hide_holders.add if on else hide_holders.discard)(msg.sender)
+    if bool(hide_holders) != was:
+        await app.send(salus.Payload.json({"type": "hide", "on": bool(hide_holders)}), channel="events", to=salus.ALL)
+
+
 @app.on_frontend_detached
 async def detached(frontend_id):
+    if frontend_id in hide_holders:
+        hide_holders.discard(frontend_id)
+        if not hide_holders:
+            try:
+                await app.send(salus.Payload.json({"type": "hide", "on": False}), channel="events", to=salus.ALL)
+            except Exception as e:  # noqa: BLE001 - nobody left to tell
+                log.debug("hide: %s", e)
     with lock:
         for key in [k for k in strokes if k[0] == frontend_id]:
             del strokes[key]
