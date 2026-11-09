@@ -1,5 +1,6 @@
-// The annotation tools (bottom panel): pan, brush, eraser and polygon, the mode (Exact, or a smart mode that turns the
-// last three into versions that follow the image), the tool width and undo/redo.
+// The annotation tools (bottom panel), in sections from left to right: the mode (Exact, or Smart, which turns brush,
+// eraser and polygon into versions that follow the image), the tools (pan, brush, eraser, polygon, 2 x 2), the tool
+// width (and, in Smart, how strict its colours are), and undo/redo at the right edge.
 // The choice is shared state, so the viewer follows it.
 import { api, followState, h, message, onEvent, setState, watchHideKey } from "../shared/common.js";
 
@@ -80,16 +81,29 @@ async function step(which) {
   }
 }
 
-// How brush, eraser and polygon work: "exact" draws exactly what is drawn; the others are smart modes, where the tools
-// follow the image. The backend lists them in the state (`modes`): Exact, Border Growth and one per segmentation
-// model in backend/models/ (marked `model`).
-const BUILT_IN = [
-  { id: "exact", name: "Exact", about: "Brush, eraser and polygon draw exactly what you draw" },
-  { id: "border", name: "Border Growth", about: "Brush, eraser and polygon follow the image: each dab grows the painted area from its border into the colors of the inner circle, stopping at edges" },
+// The modes shown: Exact and Smart (the backend's Border Growth). The model modes (Swin Edges, backend/models/) are hidden
+// for now; the backend still offers them.
+const MODES = [
+  { id: "exact", name: "Exact", icon: "architecture", about: "Brush, eraser and polygon draw exactly what you draw" },
+  { id: "border", name: "Smart", icon: "stars", about: "Brush, eraser and polygon follow the image: each dab grows the painted area from its border into the colors of the inner circle, stopping at edges" },
 ];
-const modesOf = (state) => state.modes ?? BUILT_IN;
+// Material Symbols "architecture" and "stars_2" (weight 200, 24 units), filled.
+const MODE_ICONS = {
+  architecture: "M7.13,19.92L7,18.88l2.58-7.12q0.2,0.18 0.42,0.28t0.45,0.17L7.93,19.18L7.13,19.92Zm9.73,0l-0.79-0.74l-2.52-6.97q0.23-0.07 0.45-0.17t0.42-0.28L17,18.88l-0.13,1.05ZM10.23,9.77Q9.5,9.04 9.5,8q0-0.98 0.61-1.63T11.5,5.58V3h1V5.58q0.78,0.13 1.39,0.78T14.5,8q0,1.04-0.73,1.77T12,10.5T10.23,9.77Zm2.83-0.71Q13.5,8.62 13.5,8T13.06,6.94T12,6.5T10.94,6.94T10.5,8t0.44,1.06T12,9.5t1.06-0.44Z",
+  stars: "M7.97,17.88L12,15.46l4.05,2.46L15,13.35l3.54-3.05L13.87,9.87L12,5.55l-1.85,4.3l-4.67,0.4l3.54,3.1L7.97,17.88ZM6.44,20l1.47-6.28L3,9.48L9.47,8.93L12,3l2.55,5.93l6.47,0.55l-4.91,4.24L17.58,20L12,16.66L6.44,20ZM17.42,7.06l0.45-1.88L16.37,3.92l1.98-0.16l0.77-1.77l0.77,1.77l1.98,0.16L20.36,5.18l0.45,1.88l-1.69-1l-1.69,1Zm-5.4,4.67Z",
+};
+function modeIcon(name) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "currentColor");
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", MODE_ICONS[name]);
+  svg.append(path);
+  return svg;
+}
 
-// Border Growth only: how strict the colours away from the brush are (backend/borderbrush.py, `strict_profile`).
+// Smart only: how strict the colours away from the brush are (backend/borderbrush.py, `strict_profile`).
 const SENSITIVITIES = [
   { id: "normal", name: "Normal", about: "Colors: as close to the inner circle's as before, also some way beyond it" },
   { id: "strict", name: "Strict", about: "Colors: only close ones in the inner circle and very close ones beyond it; less leaking, the area stays nearer to the brush" },
@@ -97,10 +111,10 @@ const SENSITIVITIES = [
 
 function sensitivitySwitch(state) {
   const current = state.sensitivity ?? "normal";
-  return h("div", { class: "sensitivity", role: "radiogroup", "aria-label": "Colors" },
-    h("span", {}, "Colors"),
-    h("div", { class: "modes" }, SENSITIVITIES.map((s) => h("button", {
-      class: "mode-option" + (current === s.id ? " on" : ""), role: "radio", "aria-checked": current === s.id ? "true" : "false",
+  return h("div", { class: "setting", role: "radiogroup", "aria-label": "Colors" },
+    h("span", { class: "label" }, "Colors"),
+    h("div", { class: "choice-buttons" }, SENSITIVITIES.map((s) => h("button", {
+      class: "choice" + (current === s.id ? " on" : ""), role: "radio", "aria-checked": current === s.id ? "true" : "false",
       title: s.about, onclick: () => current !== s.id && change({ sensitivity: s.id }),
     }, s.name))));
 }
@@ -108,68 +122,43 @@ const isSmart = (state) => !!state.mode && state.mode !== "exact";
 
 function toolButton(state, tool, label, key) {
   const smart = isSmart(state) && tool !== "pan";
-  const modeName = modesOf(state).find((m) => m.id === state.mode)?.name;
+  const modeName = MODES.find((m) => m.id === state.mode)?.name ?? "";
   return h("button", { class: "tool" + (state.tool === tool ? " on" : ""), title: `${label}${smart ? ` (${modeName})` : ""} (${key})`, onclick: () => change({ tool }) },
     icon(smart ? "smart" + tool : tool), label);
 }
 
 function render(state) {
   if (!state) return;
-  const current = state.project?.classes.find((c) => c.id === state.class_id);
   const widthValue = h("span", { class: "value" }, `${state.brush} px`);
   app.replaceChildren(
-    h("div", { class: "tools" },
-      // The modes as a row of buttons, not a <select>: the system's dropdown (a native popup on macOS) can keep mouse
-      // moves from reaching the viewer afterwards, so the brush circle did not show until the next click.
-      h("div", { class: "mode" + (isSmart(state) ? " on" : ""), role: "radiogroup", "aria-label": "Mode" },
-        icon("spark"), h("span", {}, "Mode"),
-        h("div", { class: "modes" }, modesOf(state).map((m) => h("button", {
-          class: "mode-option" + (state.mode === m.id ? " on" : ""), role: "radio", "aria-checked": state.mode === m.id ? "true" : "false",
-          title: m.about, onclick: () => state.mode !== m.id && change({ mode: m.id }),
-        }, m.name))),
-        state.mode === "border" ? sensitivitySwitch(state) : null),
-      h("div", { class: "group" },
+    // The modes as buttons, not a <select>: the system's dropdown (a native popup on macOS) can keep mouse moves from
+    // reaching the viewer afterwards, so the brush circle did not show until the next click.
+    h("section", { class: "section mode-section" },
+      h("div", { class: "section-head" }, "Mode"),
+      h("div", { class: "stack", role: "radiogroup", "aria-label": "Mode" }, MODES.map((m) => h("button", {
+        class: "mode-button" + (state.mode === m.id ? " on" : ""), role: "radio", "aria-checked": state.mode === m.id ? "true" : "false",
+        title: m.about, onclick: () => state.mode !== m.id && change({ mode: m.id }),
+      }, modeIcon(m.icon), m.name)))),
+    // the brush follows from the mode: the line between them points right
+    h("div", { class: "salus-vseparator salus-arrow", "aria-hidden": "true" }, h("span")),
+    h("section", { class: "section tool-section" },
+      h("div", { class: "section-head" }, "Brush"),
+      h("div", { class: "tool-grid" },
         toolButton(state, "pan", "Pan", "V"),
         toolButton(state, "brush", "Brush", "B"),
         toolButton(state, "eraser", "Eraser", "E"),
         toolButton(state, "polygon", "Polygon", "P"))),
-    h("div", { class: "sep" }),
-    h("div", { class: "group", title: isSmart(state) ? "Width of the inner circle, on screen" : "Brush and eraser width, on screen" },
-      h("span", { class: "label" }, "Width"),
-      h("input", { type: "range", min: 4, max: 200, value: state.brush, oninput: (e) => (widthValue.textContent = `${e.target.value} px`), onchange: (e) => change({ brush: Number(e.target.value) }) }),
-      widthValue),
-    h("div", { class: "sep" }),
-    h("div", { class: "group" },
+    // the brush settings follow from the brush: the line between them points right
+    h("div", { class: "salus-vseparator salus-arrow", style: "--salus-right: var(--salus-depth-default)", "aria-hidden": "true" }, h("span")),
+    h("section", { class: "section width-section" },
+      h("div", { class: "section-head" }, "Brush settings"),
+      h("div", { class: "setting", title: isSmart(state) ? "Width of the inner circle, on screen" : "Brush and eraser width, on screen" },
+        h("span", { class: "label" }, "Width"),
+        h("input", { type: "range", min: 4, max: 200, value: state.brush, oninput: (e) => (widthValue.textContent = `${e.target.value} px`), onchange: (e) => change({ brush: Number(e.target.value) }) }),
+        widthValue),
+      state.mode === "border" ? sensitivitySwitch(state) : null,
+      error && h("div", { class: "error" }, error)),
+    h("section", { class: "section history-section" },
       h("button", { class: "tool", title: "Undo (Ctrl/Cmd+Z)", disabled: !history.can_undo || !state.image, onclick: () => step("undo") }, icon("undo")),
-      h("button", { class: "tool", title: "Redo (Ctrl/Cmd+Shift+Z)", disabled: !history.can_redo || !state.image, onclick: () => step("redo") }, icon("redo"))),
-    h("div", { class: "sep" }),
-    h("div", { class: "current-class" }, current
-      ? [h("span", { class: "label" }, "Class"), h("span", { class: "chip", style: `background:${current.color}` }), current.name]
-      : h("span", { class: "faint" }, state.project ? "No class chosen: add or pick one in the class editor" : "No project open")),
-    error && h("span", { class: "error" }, error),
-    h("span", { class: "grow" }),
-    h("span", { class: "faint", style: "font-size:11px" }, ...help(state.tool, isSmart(state), modesOf(state).find((m) => m.id === state.mode))));
-}
-
-function help(tool, smart, mode) {
-  const pan = [" Right-drag ", tool === "eraser" ? "paints" : "erases", ". Hold ", h("kbd", {}, "Ctrl"), " or ", h("kbd", {}, "Space"), " to pan."];
-  const esc = [h("kbd", {}, "Esc"), " cancels."];
-  const polygon = ["click points, double-click or click the first point to close, or drag freehand. ", h("kbd", {}, "⌫"), " removes the last point, ", ...esc];
-  if (tool === "pan") return ["Pan: drag to move the image, scroll to zoom."];
-  if (mode?.model) { // a segmentation model (backend/models/): regions, or edges
-    const wait = "The model segments the view around the brush first. ";
-    const what = mode.output === "edges" ? "the area around its centre, up to the model's edges" : "the model's region under its centre";
-    if (tool === "brush") return [`${mode.name} brush: drag to fill, inside the circle, ${what}. `, wait, h("kbd", {}, "Shift"), "+drag erases, ", ...esc, ...pan];
-    if (tool === "eraser") return [`${mode.name} eraser: drag to erase, inside the circle, ${what}. `, wait, ...esc, ...pan];
-    return [`${mode.name} polygon: the polygon is filled and grown along its outline the same way; `, ...polygon, ...pan];
-  }
-  if (smart) { // Border Growth
-    const grows = "growing what the stroke has painted (at first the centre) into the colours of the inner circle, stopping at edges. ";
-    if (tool === "brush") return ["Border growth brush: drag to fill, ", grows, h("kbd", {}, "Shift"), "+drag erases, ", ...esc, ...pan];
-    if (tool === "eraser") return ["Border growth eraser: drag to erase, ", grows, ...esc, ...pan];
-    return ["Border growth polygon: the polygon is filled and grown out from its outline the same way; ", ...polygon, ...pan];
-  }
-  if (tool === "brush") return ["Brush: drag to paint. ", h("kbd", {}, "Shift"), "+drag erases, ", ...esc, ...pan];
-  if (tool === "eraser") return ["Eraser: drag to cut the brushed area out of all shapes. ", ...esc, ...pan];
-  return ["Polygon: ", ...polygon, ...pan];
+      h("button", { class: "tool", title: "Redo (Ctrl/Cmd+Shift+Z)", disabled: !history.can_redo || !state.image, onclick: () => step("redo") }, icon("redo"))));
 }

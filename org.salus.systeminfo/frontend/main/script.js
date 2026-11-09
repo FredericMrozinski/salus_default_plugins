@@ -33,8 +33,8 @@ const cores = (n) => (Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/0+
 function memoryCard(memory) {
   const used = memory.total - memory.available;
   const limit = memory.limit;
-  return h("section", { class: "card" },
-    h("h2", {}, "Memory (RAM)"),
+  return h("section", { class: "card salus-card" },
+    h("h2", { class: "salus-title" }, "Memory (RAM)"),
     h("div", { class: "big" }, bytes(memory.total)),
     limit && limit.limit < memory.machine_total
       ? capped(limit.kind === "spawner" ? "Capped by JupyterHub's memory limit (MEM_LIMIT)" : `Capped by the container (${limit.source} memory limit)`)
@@ -55,8 +55,8 @@ function cpuCard(cpu) {
     cpuset: "the CPUs it may run on (cpuset)",
     spawner: "JupyterHub's CPU limit (CPU_LIMIT)",
   }[effective.limited_by];
-  return h("section", { class: "card" },
-    h("h2", {}, "CPU"),
+  return h("section", { class: "card salus-card" },
+    h("h2", { class: "salus-title" }, "CPU"),
     h("div", { class: "big" }, cpu.model ?? "Unknown CPU"),
     limitedBy ? capped(`Usable: ${cores(effective.cores)} of ${cpu.logical_cores} cores, capped by ${limitedBy}`) : null,
     rows([
@@ -74,8 +74,8 @@ function environmentCard(environment) {
   if (!environment) return null;
   const { container, virtual_machine: vm, cgroup } = environment;
   const where = container && vm ? `${container.kind} container in a ${vm.kind} VM` : container ? `${container.kind} container` : vm ? `${vm.kind} virtual machine` : "Directly on the machine";
-  return h("section", { class: "card" },
-    h("h2", {}, "Runs in"),
+  return h("section", { class: "card salus-card" },
+    h("h2", { class: "salus-title" }, "Runs in"),
     h("div", { class: "big" }, where),
     rows([
       ["Container", container ? `${container.kind} (${container.evidence})` : "none found"],
@@ -97,8 +97,8 @@ function gpuCard(gpu) {
     : [[gpu.mig ? "VRAM of the slice" : "VRAM", bytes(gpu.memory_total)],
        ["Free", gpu.memory_free !== null && gpu.memory_free !== undefined ? bytes(gpu.memory_free) : "not reported (needs NVML)"]];
   const mps = gpu.mps ? [["MPS (PyTorch)", yesNo(gpu.mps.available, "available", "not available")]] : [];
-  return h("section", { class: "card" },
-    h("h2", {}, gpu.index !== undefined && gpu.index !== null ? `GPU ${gpu.index}` : "GPU"),
+  return h("section", { class: "card salus-card" },
+    h("h2", { class: "salus-title" }, gpu.index !== undefined && gpu.index !== null ? `GPU ${gpu.index}` : "GPU"),
     h("div", { class: "big" }, gpu.name),
     gpu.memory_used !== null && gpu.memory_used !== undefined && gpu.memory_total ? bar(gpu.memory_used, gpu.memory_total) : null,
     rows([
@@ -131,7 +131,7 @@ function render() {
   }
   const gpus = info.gpus.length
     ? info.gpus.map(gpuCard)
-    : [h("section", { class: "card" }, h("h2", {}, "GPU"), h("div", { class: "faint" }, "No GPU found."),
+    : [h("section", { class: "card salus-card" }, h("h2", { class: "salus-title" }, "GPU"), h("div", { class: "faint" }, "No GPU found."),
         info.gpu_notes?.length ? h("ul", { class: "faint notes" }, info.gpu_notes.map((note) => h("li", {}, note))) : null)];
   app.replaceChildren(...[header,
     error ? h("p", { class: "error" }, error) : null,

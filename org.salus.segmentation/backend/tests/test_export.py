@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import numpy as np  # noqa: E402
 import pyvips  # noqa: E402
 from shapely.geometry import Polygon  # noqa: E402
 
@@ -102,6 +103,21 @@ class ExportJobTest(unittest.TestCase):
         self.assertEqual(legend["background"]["color"], "#000000")
         self.assertEqual(oct((self.dir / "out/classes.json").stat().st_mode & 0o777), "0o644")
         self.assertFalse(list((self.dir / "out").rglob("*.part")))
+
+    def test_every_pyramid_level_holds_only_class_colors(self):
+        # A slanted edge between two classes: averaging the smaller levels would make up colors that are no class's.
+        Annotations(self.project, "one.tif").add_polygon([[351, 151], [901, 233], [627, 777]], self.stroma)
+        job = self.run_job(["one.tif"])
+        self.assertEqual(job.items[0]["status"], "done")
+        allowed = {(255, 0, 0), (0, 255, 0), (0, 0, 0)}
+        path = str(self.dir / "out/one.tif")
+        pages = pyvips.Image.new_from_file(path).get("n-pages")
+        self.assertGreater(pages, 1)
+        for page in range(pages):
+            level = pyvips.Image.new_from_file(path, page=page).numpy()
+            colors = {tuple(int(v) for v in c) for c in np.unique(level.reshape(-1, level.shape[-1])[:, :3], axis=0)}
+            self.assertLessEqual(colors, allowed, f"level {page}")
+            self.assertEqual(len(colors), 3, f"level {page}: all three still there")
 
     def test_existing_files_are_skipped_unless_overwriting(self):
         self.run_job(["one.tif"])

@@ -15,6 +15,7 @@ from functools import wraps
 
 import salus_sdk as salus
 from workbench.active import Active
+from workbench.automation import preview
 from workbench.settings import RootSettings
 from workbench.uploads import CHUNK_SIZE
 from workbench.util import WorkbenchError
@@ -354,6 +355,30 @@ def set_schema(req):
     dataset.set_schema(body(req).get("slots"))
     notify({"type": "dataset_changed", "dataset": dataset.id, "schema": True})
     return dataset.detail()
+
+
+@route("GET", "/datasets/{id}/automation")
+def get_automation(req):
+    return wb.datasets.get(req.params["id"]).automation()
+
+
+@route("PUT", "/datasets/{id}/automation")
+def put_automation(req):
+    """Saves the automation settings ({rules}) and applies them in the background (job "automation")."""
+    return wb.set_automation(req.params["id"], body(req))
+
+
+@route("POST", "/datasets/{id}/automation/run")
+def run_automation(req):
+    return wb.run_automation(req.params["id"])
+
+
+@route("POST", "/datasets/{id}/automation/preview")
+def preview_automation(req):
+    """What unsaved settings ({rules, sample}) give for one sample; nothing is changed."""
+    data = body(req)
+    sample = data.get("sample")
+    return preview(wb.datasets.get(req.params["id"]), data, None if sample is None else str(sample))
 
 
 @route("GET", "/datasets/{id}/stats")

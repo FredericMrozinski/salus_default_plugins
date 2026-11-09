@@ -5,32 +5,31 @@ body {
     height: 100vh;
     display: flex;
     flex-direction: column;
-    background: #101216;
-    color: #cfd3dc;
+    background: var(--salus-depth-background-1, #101216);
+    color: var(--salus-fg, #cfd3dc);
 }
 
+/* the image lies deepest: background-2; the status line is a footer (foreground-1) */
 #viewer {
     flex: 1;
     min-height: 0;
-    background: #101216;
+    background: var(--salus-depth-background-2, #101216);
 }
 
 #status {
     padding: 6px 10px;
     font-size: 12px;
-    border-top: 1px solid #262a33;
-    background: #171a20;
+    border-top: 2px solid var(--salus-separator-dark); border-image: var(--salus-separator-above);
+    background: var(--salus-depth-foreground-1, #171a20);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 
 .backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, .45); display: grid; place-items: center; z-index: 20; padding: 12px; }
-.dialog { background: var(--salus-surface, #1b1e25); color: var(--salus-fg, #cfd3dc); border: 1px solid var(--salus-border, #2a2d35);
+.dialog { background: var(--salus-depth-foreground-1, #1b1e25); color: var(--salus-fg, #cfd3dc); border: 1px solid var(--salus-border, #2a2d35);
           border-radius: 8px; width: min(480px, 100%); box-shadow: 0 10px 40px rgba(0, 0, 0, .4); font-size: 13px; }
-.dialog > header { padding: 10px 14px; font-weight: 600; border-bottom: 1px solid var(--salus-border, #2a2d35); }
+.dialog > header { padding: 10px 14px; font-weight: 600; border-bottom: 2px solid var(--salus-separator-dark); border-image: var(--salus-separator-below); }
 .dialog > .content { padding: 4px 14px; line-height: 1.45; }
-.dialog > footer { padding: 10px 14px; border-top: 1px solid var(--salus-border, #2a2d35); display: flex; gap: 8px; justify-content: flex-end; }
-.dialog button { font: inherit; padding: 4px 12px; border-radius: 6px; border: 1px solid var(--salus-border, #2a2d35);
-                 background: var(--salus-surface-2, #23262e); color: inherit; cursor: pointer; }
-.dialog button.primary { background: var(--salus-accent, #3a6df0); color: var(--salus-accent-fg, #fff); border-color: transparent; }
+.dialog > footer { padding: 10px 14px; border-top: 2px solid var(--salus-separator-dark); border-image: var(--salus-separator-above); display: flex; gap: 8px; justify-content: flex-end; }
+/* its buttons are the theme's (raised; `primary`) */

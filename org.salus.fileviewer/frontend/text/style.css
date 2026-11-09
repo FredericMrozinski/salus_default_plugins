@@ -1,20 +1,20 @@
 html, body { height: 100%; }
 [hidden] { display: none !important; } /* the flex rules below would show hidden elements otherwise */
 body { display: flex; flex-direction: column; overflow: hidden; margin: 0; }
-.bar { display: flex; gap: 14px; align-items: center; padding: 6px 10px; background: var(--salus-surface); border-bottom: 1px solid var(--salus-border); flex-wrap: wrap; }
+.bar { display: flex; gap: 14px; align-items: center; padding: 6px 10px; background: var(--salus-depth-foreground-1); border-bottom: 2px solid var(--salus-separator-dark); border-image: var(--salus-separator-below); flex-wrap: wrap; }
 .bar .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bar label { display: flex; gap: 6px; align-items: center; white-space: nowrap; }
 .bar .check { cursor: pointer; user-select: none; }
 .faint { color: var(--salus-fg-faint, var(--salus-fg-muted)); font-size: 12px; }
 .message { padding: 24px; text-align: center; color: var(--salus-fg-muted); }
 .message.error { color: var(--salus-danger); }
-.notice { padding: 6px 12px; font-size: 12px; color: var(--salus-warning, #b7791f); border-bottom: 1px solid var(--salus-border); background: var(--salus-surface-alt, transparent); }
+.notice { padding: 6px 12px; font-size: 12px; color: var(--salus-warning, #b7791f); border-bottom: 2px solid var(--salus-separator-dark); border-image: var(--salus-separator-below); background: var(--salus-depth-foreground-1); }
 
 /* The text with line numbers. The numbers scroll with the text; with Wrap on they would not line up, so they go. */
-.view { flex: 1; min-height: 0; overflow: auto; display: flex; align-items: flex-start; background: var(--salus-bg); }
+.view { flex: 1; min-height: 0; overflow: auto; display: flex; align-items: flex-start; background: var(--salus-depth-default); }
 .view pre { margin: 0; padding: 10px 0; font: 12.5px/1.5 var(--salus-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); tab-size: 4; }
 .gutter { position: sticky; left: 0; z-index: 1; padding: 10px 10px 10px 12px !important; text-align: right; color: var(--salus-fg-faint, #8b8f99);
-  background: var(--salus-surface); border-right: 1px solid var(--salus-border); user-select: none; -webkit-user-select: none; min-height: 100%; box-sizing: border-box; }
+  background: var(--salus-depth-background-1); border-right: 1px solid var(--salus-border); user-select: none; -webkit-user-select: none; min-height: 100%; box-sizing: border-box; }
 .code { flex: 1; min-width: 0; }
 .code code.hljs { display: block; padding: 0 14px; background: transparent; overflow: visible; }
 .view.wrap .gutter { display: none; }

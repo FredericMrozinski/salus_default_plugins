@@ -1,23 +1,39 @@
-#app { height: 100%; display: flex; align-items: center; gap: 14px; padding: 8px 12px; box-sizing: border-box; flex-wrap: wrap; align-content: flex-start; }
-.group { display: flex; align-items: center; gap: 6px; }
-.sep { width: 1px; align-self: stretch; background: var(--salus-border, #2a2d35); }
-.tool { display: flex; align-items: center; gap: 6px; padding: 6px 12px; }
-.tool svg { width: 18px; height: 18px; }
-.tool.on { background: var(--salus-accent, #3a6df0); color: var(--salus-accent-fg, #fff); border-color: transparent; }
-.tool.on:hover:not(:disabled) { background: var(--salus-accent, #3a6df0); filter: brightness(1.1); }
-.tools { display: flex; flex-direction: column; gap: 4px; }
-.mode { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--salus-fg-muted, #a9adba); user-select: none; }
-.mode svg { width: 14px; height: 14px; }
-.mode.on svg { color: var(--salus-accent, #3a6df0); }
-/* The modes: one segmented row of buttons; the chosen one is filled (wraps if more modes are added). */
-.modes { display: flex; flex-wrap: wrap; border: 1px solid var(--salus-border, #2a2d35); border-radius: 6px; overflow: hidden; }
-.mode-option { font-size: 12px; padding: 2px 10px; border: 0; border-radius: 0; background: transparent; color: var(--salus-fg, #e6e6e6); }
-.mode-option + .mode-option { border-left: 1px solid var(--salus-border, #2a2d35); }
-.mode-option.on { background: var(--salus-accent, #3a6df0); color: var(--salus-accent-fg, #fff); }
-.mode-option.on:hover:not(:disabled) { background: var(--salus-accent, #3a6df0); }
+/* The tools panel: sections side by side, each the panel's full height.
+   Depth (theme.css): the mode, brush and undo/redo sections are foreground-1, the width section is default. */
+#app { height: 100%; display: flex; align-items: stretch; overflow: auto hidden; }
+.section { display: flex; padding: 10px 12px; box-sizing: border-box; }
 .label { font-size: 12px; color: var(--salus-fg-muted, #a9adba); }
 .value { font-size: 12px; font-variant-numeric: tabular-nums; min-width: 42px; }
-.current-class { display: flex; align-items: center; gap: 6px; font-size: 12px; }
-.chip { width: 12px; height: 12px; border-radius: 3px; border: 1px solid rgba(127, 127, 127, .6); display: inline-block; }
-kbd { font: 11px var(--salus-font-mono, monospace); padding: 0 4px; border: 1px solid var(--salus-border, #2a2d35); border-radius: 3px; color: var(--salus-fg-muted, #a9adba); }
-.sensitivity { display: flex; align-items: center; gap: 6px; margin-left: 6px; }
+.error { font-size: 12px; color: var(--salus-danger, #ff6369); }
+/* the tiny title at the top of a section */
+.section-head { font-size: 10px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--salus-fg-muted, #a9adba); }
+
+/* Mode: Exact and Smart, stacked */
+.mode-section { flex: none; flex-direction: column; gap: 8px; background: var(--salus-depth-foreground-1, #23262a); }
+.stack { display: flex; flex-direction: column; gap: 8px; }
+.mode-button { display: flex; align-items: center; gap: 10px; width: 120px; height: 40px; padding: 0 14px; font-size: 14px; text-align: left; }
+.mode-button svg { width: 24px; height: 24px; flex: none; }
+.mode-button.on, .mode-button.on:hover:not(:disabled) { --salus-button-fill: var(--salus-accent, #3a6df0); color: var(--salus-accent-fg, #fff); }
+
+/* Tools: 2 x 2 */
+.tool-section { flex: none; flex-direction: column; gap: 8px; background: var(--salus-depth-foreground-1, #23262a); }
+.tool-grid { display: grid; grid-template-columns: repeat(2, minmax(110px, auto)); grid-auto-rows: 40px; gap: 8px; }
+.tool { display: flex; align-items: center; gap: 8px; padding: 0 12px; font-size: 13px; }
+.tool svg { width: 20px; height: 20px; flex: none; }
+.tool.on { --salus-button-fill: var(--salus-accent, #3a6df0); color: var(--salus-accent-fg, #fff); }
+.tool.on:hover:not(:disabled) { --salus-button-fill: var(--salus-accent, #3a6df0); filter: brightness(1.1); }
+
+/* The lines between mode, brush and brush settings: the theme's salus-vseparator salus-arrow. */
+
+/* Width (and Smart's colours) */
+.width-section { flex: 1; min-width: 220px; flex-direction: column; gap: 10px; background: var(--salus-depth-default, #15171a); }
+.setting { display: flex; align-items: center; gap: 10px; }
+.setting .label { width: 46px; flex: none; }
+.setting input[type=range] { flex: 1; min-width: 80px; max-width: 320px; }
+.choice-buttons { display: flex; gap: 6px; }
+.choice { font-size: 12px; padding: 3px 14px; }
+.choice.on, .choice.on:hover:not(:disabled) { --salus-button-fill: var(--salus-accent, #3a6df0); color: var(--salus-accent-fg, #fff); }
+
+/* Undo / redo: stacked at the right edge */
+.history-section { flex: none; flex-direction: column; justify-content: center; gap: 8px; background: var(--salus-depth-foreground-1, #23262a); }
+.history-section .tool { width: 40px; height: 40px; padding: 0; justify-content: center; }

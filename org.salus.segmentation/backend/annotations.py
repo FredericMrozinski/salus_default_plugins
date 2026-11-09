@@ -241,6 +241,21 @@ class Annotations:
             self.save()
             return True
 
+    def set_class(self, shape_id: str, class_id: int) -> bool:
+        """Gives a shape another class. It keeps its id, outline and name, and is not merged with the shapes of its new
+        class it overlaps (unlike painting). Returns False if it had that class already."""
+        self.project.cls(class_id)
+        with self.lock:
+            target = next((s for s in self.shapes if s.id == shape_id), None)
+            if target is None:
+                raise ViewerError("No such shape.", 404)
+            if target.class_id == class_id:
+                return False
+            self._checkpoint()
+            self.shapes = [Shape(s.id, class_id, s.geometry, s.name) if s is target else s for s in self.shapes]
+            self.save()
+            return True
+
     def import_shapes(self, shapes: list[tuple], replace: bool) -> int:
         """Adds shapes (class id, geometry[, name]) read from another file, or replaces all shapes with them. One undo step."""
         with self.lock:

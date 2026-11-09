@@ -7,6 +7,7 @@ import shutil
 from datetime import date, datetime
 from pathlib import Path
 
+from . import automation
 from .catalog import Catalog
 from .sources import FileSource, TableSource
 from .util import (NotFound, Tx, WorkbenchError, check_identifier, check_name, chunks, connect, like_escape, lock_for,
@@ -314,6 +315,8 @@ class Dataset:
             slot["dangling_sources"] = [s for s in slot["sources"] if s not in known]
             slot["source_names"] = {s: self._source_name(s) for s in slot["sources"]}
         data["schema"] = slots
+        with self.connect() as conn:
+            data["automation"] = automation.load(conn, slots)
         return data
 
     def _source_name(self, source_id: str) -> str | None:
@@ -362,6 +365,28 @@ class Dataset:
             self.recompute()
         with self.connect() as conn:
             return self.slots(conn)
+
+    # -- automation (automation.py)
+    def automation(self) -> dict:
+        with self.connect() as conn:
+            return automation.load(conn, self.slots(conn))
+
+    def set_automation(self, raw) -> dict:
+        with self.lock:
+            with self.connect() as conn:
+                config = automation.normalize(raw, self.slots(conn))
+                automation.save(conn, config)
+        return config
+
+    def run_automation(self) -> dict:
+        return automation.run(self)
+
+    def automation_sources(self) -> set[str]:
+        """The sources whose refresh can change what the automation does (the source field and the derived ref fields)."""
+        with self.connect() as conn:
+            slots = self.slots(conn)
+            rules = automation.load(conn, slots)["rules"]
+        return {sid for s in slots if str(s["id"]) in rules and s["kind"] != "value" for sid in s["sources"]}
 
     # -- entries
     def create_entry(self) -> dict:
@@ -471,6 +496,7 @@ class Dataset:
                 if cell is None:
                     raise NotFound("No such entry.")
                 touched = self._identity_matches(conn, slot_id, cell)
+                automation.clear_issue(conn, entry_id, slot_id)
                 if slot["kind"] == "value":
                     raw = payload.get("value")
                     if raw is None or (isinstance(raw, str) and not raw.strip()):
@@ -565,6 +591,7 @@ class Dataset:
                 slots = {s["id"]: s for s in self.slots(conn)}
                 cells = self._load_cells(conn, entry_ids, slot_ids, source_id)
                 dup = self._duplicates(conn, slots)
+                flagged = automation.issues(conn)
                 resolver = Resolver(self.catalog)
                 groups: dict[tuple, set] = {}
                 for c in cells:
@@ -582,6 +609,8 @@ class Dataset:
                     if slot is None:
                         continue
                     state, detail, label = evaluate(slot, c, resolver, fps)
+                    if (c["entry_id"], c["slot_id"]) in flagged and _is_empty(slot, c):
+                        state, detail = "invalid", f"automation: {flagged[(c['entry_id'], c['slot_id'])]}"
                     if state == "ok" and slot["unique"] and c["slot_id"] in dup and self._identity(slot, c) in dup[c["slot_id"]]:
                         state, detail = "invalid", "duplicate: another entry has the same value"
                     affected.add(c["entry_id"])
@@ -705,6 +734,17 @@ class DatasetStore:
                 dataset.path.rmdir()
             except OSError:
                 pass
+
+    def automated(self, source_id: str) -> list[Dataset]:
+        """Datasets whose automation reads the source (its source field or a derived file/row field lists it)."""
+        out = []
+        for summary in self.list():
+            if "error" in summary:
+                continue
+            dataset = self.get(summary["id"])
+            if source_id in dataset.automation_sources():
+                out.append(dataset)
+        return out
 
     def datasets_referencing(self, source_id: str) -> list[Dataset]:
         out = []

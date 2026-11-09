@@ -4,6 +4,12 @@
 // it is renamed); clicking one shows it in the middle of the viewer.
 // At the bottom: "Hide annotations", held down to see the tissue under the shapes (also the H key). How strongly the
 // shapes are filled is a setting of the plugin (Settings, "Annotation fill").
+// Each shape can have comments, so that users can discuss it: the row shows the first 50 characters of the latest one,
+// and picking a shape that has comments opens the whole conversation with a box to write in (Ctrl/Cmd+Enter sends); the
+// speech bubble opens and closes it (the way to start a conversation). The arrow beside "Comment" resolves the
+// conversation: it stays, but picking the shape no longer opens it (the bubble still does; a new comment reopens it).
+// The author is the system user running the backend; one's own comments can be edited, or deleted after typing "delete".
+// Right-clicking a shape offers to give it another class or to delete it.
 // Name and drawing color can be changed; classes are never deleted. Colors of exported pixel maps are chosen in the export view.
 import { api, followState, h, message, modal, onEvent, setHideHeld, setState, watchHideKey } from "../shared/common.js";
 
@@ -16,6 +22,19 @@ let loadToken = 0;
 const expanded = new Set(); // ids of the classes whose shapes are listed
 let naming = null; // id of the shape being renamed
 let picked = null; // id of the shape last shown in the viewer
+let comments = {}; // shape id -> its entries, oldest first: comments {id, author, time, text, edited?} and resolve and
+                   // reopen entries {id, kind: "resolved" | "reopened", author, time}
+let resolved = {}; // shape id -> its resolve entry, for the resolved conversations
+const isEvent = (c) => c.kind === "resolved" || c.kind === "reopened";
+const said = (id) => (comments[id] ?? []).filter((c) => !isEvent(c)); // the comments alone
+let opened = null; // id of the shape whose conversation was opened with its speech bubble
+let closed = null; // id of the picked shape whose conversation was closed with its speech bubble
+let sendMenu = null; // id of the shape whose "Comment" arrow menu is open
+let me = ""; // the user comments are written as
+const drafts = new Map(); // shape id -> the comment being written
+let composeFocus = null; // id of the shape whose comment box gets the focus at the next render
+let sending = false;
+let editingComment = null; // {id, text} of the own comment being edited
 
 const shared = followState((state) => {
   if (state?.image !== shapesFor) loadShapes(state?.image);
@@ -24,6 +43,7 @@ const shared = followState((state) => {
 
 onEvent((event) => {
   if (event.type === "annotations" && event.image === shapesFor) loadShapes(shapesFor);
+  if (event.type === "comments" && event.image === shapesFor) loadComments(shapesFor);
   if (event.type === "focus" && event.image === shapesFor && picked !== (event.id ?? null)) {
     picked = event.id ?? null; // let go in the viewer (a click beside the shape, or drawing)
     render(shared.get());
@@ -32,9 +52,10 @@ onEvent((event) => {
 
 async function loadShapes(image) {
   const token = ++loadToken;
-  if (image !== shapesFor) (shapes = null), (picked = naming = null);
+  if (image !== shapesFor) (shapes = null), (picked = naming = null), (comments = {}), (resolved = {}), (opened = closed = sendMenu = null), drafts.clear();
   shapesFor = image ?? null;
   if (!image) return;
+  loadComments(image);
   try {
     const data = await api("GET", "/annotations", { query: { image } });
     if (token !== loadToken) return;
@@ -43,6 +64,165 @@ async function loadShapes(image) {
   } catch {
     // the viewer shows the problem
   }
+}
+
+async function loadComments(image) {
+  try {
+    const data = await api("GET", "/comments", { query: { image } });
+    if (image !== shapesFor) return;
+    comments = data.shapes ?? {};
+    resolved = data.resolved ?? {};
+    me = data.me ?? "";
+    render(shared.get());
+  } catch {
+    // the viewer shows the problem
+  }
+}
+
+// Sends the comment being written; `resolve` then resolves the conversation (true), or opens it again (false).
+async function sendComment(shape, resolve) {
+  const text = (drafts.get(shape.id) ?? "").trim();
+  sendMenu = null;
+  if ((!text && resolve === undefined) || sending) return render(shared.get());
+  sending = true;
+  const image = shapesFor;
+  try {
+    if (text) {
+      const comment = await api("POST", "/comments", { json: { image, shape: shape.id, text } });
+      if (image === shapesFor) (comments[shape.id] ??= []).push(comment), delete resolved[shape.id]; // at once; the event reloads them
+      drafts.delete(shape.id);
+    }
+    if (resolve !== undefined && (resolve || resolved[shape.id])) {
+      const { entry } = await api("POST", "/comments/resolve", { json: { image, shape: shape.id, resolved: resolve } });
+      if (image === shapesFor && entry) {
+        (comments[shape.id] ??= []).push(entry);
+        resolve ? (resolved[shape.id] = entry) : delete resolved[shape.id];
+      }
+    }
+    if (resolve) (opened = null), (closed = shape.id); // resolved: put the conversation away
+    else composeFocus = shape.id;
+    error = "";
+  } catch (e) {
+    error = message(e);
+  }
+  sending = false;
+  render(shared.get());
+}
+
+const when = (time) => {
+  const date = new Date(time);
+  return isNaN(date) ? "" : date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+};
+const preview = (text, length = 50) => {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > length ? flat.slice(0, length).trimEnd() + "…" : flat;
+};
+
+// Whether a shape's conversation is shown: picking opens it if it has comments and is not resolved; the bubble overrides.
+const threadOpen = (s) => opened === s.id || (picked === s.id && closed !== s.id && said(s.id).length > 0 && !resolved[s.id]);
+
+function toggleThread(s) {
+  if (threadOpen(s)) (opened = null), (closed = s.id);
+  else {
+    if (picked !== s.id) pick(s);
+    (opened = s.id), (closed = null), (composeFocus = s.id);
+  }
+  render(shared.get());
+}
+
+// The conversation on a shape and the box to write in.
+function thread(shape) {
+  const entries = comments[shape.id] ?? [];
+  const list = said(shape.id);
+  const done = resolved[shape.id];
+  const box = h("textarea", {
+    class: "compose", rows: 2, placeholder: list.length ? "Reply…" : "Write a comment…", "data-shape": shape.id, value: drafts.get(shape.id) ?? "",
+    oninput: (e) => { drafts.set(shape.id, e.target.value); send.disabled = !e.target.value.trim(); more.disabled = !list.length && !done && send.disabled; },
+    onkeydown: (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); sendComment(shape); } if (e.key === "Escape") e.target.blur(); },
+  });
+  const hasText = () => !!(drafts.get(shape.id) ?? "").trim();
+  const send = h("button", { class: "primary", disabled: !hasText(), title: "Ctrl/Cmd+Enter", onclick: () => sendComment(shape) }, "Comment");
+  const more = h("button", { class: "primary more", title: "More", "aria-haspopup": "menu", "aria-expanded": sendMenu === shape.id ? "true" : "false",
+    disabled: !list.length && !done && !hasText(), onclick: () => { sendMenu = sendMenu === shape.id ? null : shape.id; render(shared.get()); } }, chevron());
+  const options = sendMenu === shape.id && h("div", { class: "menu send-menu", role: "menu" },
+    done
+      ? h("button", { class: "item", role: "menuitem", onclick: () => sendComment(shape, false) }, reopen(), h("span", { class: "label" }, hasText() ? "Comment and reopen" : "Reopen"))
+      : h("button", { class: "item", role: "menuitem", disabled: !list.length && !hasText(), onclick: () => sendComment(shape, true) },
+        check(), h("span", { class: "label" }, hasText() ? "Comment and resolve" : "Resolve")));
+  return h("div", { class: "thread", onclick: (e) => e.stopPropagation() },
+    entries.map((c) => {
+      if (isEvent(c)) { // resolving and reopening, among the comments as they happened
+        return h("div", { class: "comment event " + c.kind },
+          h("div", { class: "meta" }, c.kind === "resolved" ? check() : reopen(), h("strong", {}, c.author || "?"),
+            h("span", {}, c.kind === "resolved" ? "resolved this" : "reopened this"), h("span", { class: "faint", title: when(c.time) }, when(c.time))));
+      }
+      const mine = c.author === me;
+      const editing = mine && editingComment?.id === c.id;
+      return h("div", { class: "comment" + (mine ? " mine" : "") },
+        h("div", { class: "meta" }, h("strong", {}, c.author || "?"),
+          h("span", { class: "faint", title: c.edited ? `edited ${when(c.edited)}` : "" }, when(c.time) + (c.edited ? " · edited" : "")),
+          mine && !editing && h("span", { class: "own" },
+            h("button", { class: "mini", title: "Edit your comment", onclick: () => { editingComment = { id: c.id, text: c.text }; composeFocus = shape.id; render(shared.get()); } }, pen()),
+            h("button", { class: "mini danger", title: "Delete your comment…", onclick: () => deleteCommentDialog(shape, c) }, trash()))),
+        editing ? editBox(shape, c) : h("div", { class: "text" }, c.text));
+    }),
+    h("div", { class: "composer" }, box,
+      h("div", { class: "row" }, me && h("span", { class: "faint" }, `as ${me}`), h("span", { class: "split" }, send, more, options))));
+}
+
+// Editing one's own comment in place: Ctrl/Cmd+Enter saves, Escape gives up.
+function editBox(shape, c) {
+  const box = h("textarea", { class: "compose edit-comment", rows: 3, value: editingComment.text, "data-shape": shape.id,
+    oninput: (e) => { editingComment.text = e.target.value; save.disabled = !e.target.value.trim(); },
+    onkeydown: (e) => {
+      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); saveComment(shape, c); }
+      if (e.key === "Escape") { e.stopPropagation(); editingComment = null; render(shared.get()); }
+    } });
+  const save = h("button", { class: "primary", title: "Ctrl/Cmd+Enter", onclick: () => saveComment(shape, c) }, "Save");
+  return h("div", { class: "composer" }, box,
+    h("div", { class: "row" }, h("button", { onclick: () => { editingComment = null; render(shared.get()); } }, "Cancel"), save));
+}
+
+async function saveComment(shape, c) {
+  const text = editingComment?.text.trim();
+  if (!text) return;
+  try {
+    const updated = await api("PATCH", "/comments", { json: { image: shapesFor, shape: shape.id, id: c.id, text } });
+    Object.assign(c, updated); // at once; the event reloads them
+    editingComment = null;
+    error = "";
+  } catch (e) {
+    error = message(e);
+  }
+  render(shared.get());
+}
+
+// Comments have no undo, so deleting one is confirmed by typing "delete".
+function deleteCommentDialog(shape, c) {
+  const image = shapesFor;
+  const word = h("input", { type: "text", placeholder: "delete", autocomplete: "off", spellcheck: false });
+  const problem = h("div", { class: "error" });
+  const go = h("button", { class: "primary danger", disabled: true }, "Delete comment");
+  word.addEventListener("input", () => (go.disabled = word.value.trim().toLowerCase() !== "delete"));
+  word.addEventListener("keydown", (e) => e.key === "Enter" && !go.disabled && go.click());
+  go.addEventListener("click", async () => {
+    go.disabled = true;
+    try {
+      await api("POST", "/comments/delete", { json: { image, shape: shape.id, id: c.id } });
+      if (image === shapesFor) comments[shape.id] = (comments[shape.id] ?? []).filter((x) => x.id !== c.id);
+      close();
+      render(shared.get());
+    } catch (e) {
+      problem.textContent = message(e);
+      go.disabled = false;
+    }
+  });
+  const close = modal("Delete your comment?", [
+    h("blockquote", { class: "quote" }, preview(c.text, 200)),
+    h("p", {}, "The comment is deleted for everyone and cannot be brought back. Type ", h("b", {}, "delete"), " to confirm."),
+    word, problem,
+  ], [h("button", { onclick: () => close() }, "Cancel"), go]);
+  word.focus();
 }
 
 function toShape(feature) {
@@ -85,8 +265,10 @@ function thumbnail(shape, color) {
 
 // Shows the shape in the middle of the viewer (the viewer zooms to it and outlines it).
 function pick(shape) {
+  if (picked !== shape.id) opened = closed = sendMenu = null;
   picked = shape.id;
   render(shared.get());
+  loadComments(shapesFor); // other users' backends do not tell this one about their comments
   api("POST", "/focus", { json: { image: shapesFor, bbox: shape.bbox, id: shape.id } }).catch(show);
 }
 
@@ -114,7 +296,98 @@ function closeMenu() {
 }
 
 document.addEventListener("pointerdown", (e) => menu && !e.target.closest(".menu") && closeMenu());
-document.addEventListener("keydown", (e) => e.key === "Escape" && closeMenu());
+document.addEventListener("pointerdown", (e) => {
+  if (sendMenu && !e.target.closest(".send-menu, .split .more")) (sendMenu = null), render(shared.get());
+});
+document.addEventListener("keydown", (e) => e.key === "Escape" && (sendMenu ? ((sendMenu = null), render(shared.get())) : closeMenu()));
+
+// The menu: "Change class" (which lists the classes in the menu itself; the panel is too narrow for a submenu beside
+// it) and "Delete annotation…".
+function menuItems(project) {
+  const { shape, label } = menu;
+  if (menu.view === "class") {
+    return [
+      h("div", { class: "menu-title" }, h("button", { class: "item back", title: "Back", onclick: () => { menu.view = null; render(shared.get()); } }, chevron()),
+        h("span", {}, `Class of “${label}”`)),
+      ...project.classes.map((c) => h("button", {
+        class: "item" + (c.id === shape.class_id ? " current" : ""), role: "menuitemradio", "aria-checked": c.id === shape.class_id ? "true" : "false",
+        disabled: c.id === shape.class_id, title: c.id === shape.class_id ? "Its class now" : `Make it ${c.name}`,
+        onclick: () => { closeMenu(); changeClass(shape, c); },
+      }, h("span", { class: "chip", style: `background:${c.color}` }), h("span", { class: "label" }, c.name), c.id === shape.class_id && h("span", { class: "tick" }, "✓"))),
+    ];
+  }
+  return [
+    h("button", { class: "item", role: "menuitem", disabled: project.classes.length < 2, title: project.classes.length < 2 ? "Add another class first" : "Give it another class",
+      onclick: () => { menu.view = "class"; render(shared.get()); } },
+      swap(), h("span", { class: "label" }, "Change class"), h("span", { class: "more" }, chevron())),
+    h("button", { class: "item danger", role: "menuitem", onclick: () => { closeMenu(); deleteDialog(shape, label); } }, trash(), "Delete annotation…"),
+  ];
+}
+
+// Arrow keys move between the items of the menu.
+function menuKeys(e) {
+  if (e.key === "Escape") return closeMenu();
+  if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+  e.preventDefault();
+  const items = [...e.currentTarget.querySelectorAll("button.item:not(:disabled)")];
+  const at = items.indexOf(document.activeElement);
+  items[(at + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length]?.focus();
+}
+
+// The shape keeps its outline and name; it is not merged with shapes of the new class. Ctrl/Cmd+Z undoes it.
+async function changeClass(shape, c) {
+  try {
+    await api("POST", "/annotations/class", { json: { image: shapesFor, id: shape.id, class_id: c.id } });
+    shape.class_id = c.id; // at once; the reload confirms it
+    expanded.add(c.id); // so that it can be seen where it went
+    error = "";
+  } catch (e) {
+    error = message(e);
+  }
+  render(shared.get());
+}
+
+// Material Symbols "chat_bubble" (weight 200, 24 units): comments.
+function bubble() {
+  return icon24("M3,20.08V4.62Q3,3.92 3.46,3.46T4.62,3H19.38q0.69,0 1.15,0.46T21,4.62V15.38q0,0.69-0.46,1.15T19.38,17H6.08L3,20.08ZM5.65,16H19.38q0.23,0 0.42-0.19T20,15.38V4.62q0-0.23-0.19-0.42T19.38,4H4.62Q4.38,4 4.19,4.19T4,4.62V17.64L5.65,16ZM4,16V4.62Q4,4.38 4,4.19T4,4Q4,4 4,4.19T4,4.62V15.38q0,0.23 0,0.42T4,16Z", "bubble");
+}
+// Material Symbols "edit" (weight 200, 24 units): editing a comment, renaming a class or a shape.
+function pen() {
+  return icon24("M5,19H6.1L16.8,8.3L15.7,7.2L5,17.9V19ZM4,20V17.48L17.18,4.29q0.15-0.14 0.34-0.21T17.91,4T18.3,4.06t0.35,0.23l1.07,1.07q0.17,0.16 0.23,0.35T20,6.1q0,0.2-0.07,0.39T19.71,6.83L6.52,20H4ZM19.02,6.09L17.91,4.98l1.11,1.11ZM16.24,7.76L15.7,7.2l1.1,1.1L16.24,7.76Z", "pen");
+}
+
+// Material Symbols "check" (weight 200, 24 units): resolving.
+function check() {
+  return icon24("M9.55,17.31L4.58,12.34l0.71-0.71l4.26,4.26l9.16-9.16l0.71,0.71L9.55,17.31Z", "check");
+}
+// Material Symbols "rotate_left" (weight 200, 24 units): reopening.
+function reopen() {
+  return icon24("M11,21q-1.08-0.16-2.06-0.57T7.09,19.37L7.8,18.65q0.72,0.53 1.54,0.85T11,19.95V21Zm2,0V19.99q2.6-0.41 4.3-2.38T19,13.05q0-2.92-2.04-4.96T12,6.05H11.22l2.1,2.1L12.62,8.86L9.31,5.55l3.31-3.31l0.71,0.72L11.23,5.05H12q1.66,0 3.12,0.63t2.54,1.71t1.71,2.54T20,13.05q0,3.04-2,5.3T13,21ZM5.68,17.96Q5.02,17.08 4.6,16.09T4.05,14.05H5.06q0.14,0.87 0.48,1.67T6.4,17.25L5.68,17.96ZM4.05,12.05Q4.2,10.93 4.62,9.94T5.68,8.14L6.4,8.85Q5.88,9.57 5.54,10.38T5.06,12.05H4.05Z", "reopen");
+}
+function icon24(d, name) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "currentColor");
+  svg.setAttribute("class", "icon " + name);
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", d);
+  svg.append(path);
+  return svg;
+}
+
+// Material Symbols "swap_horiz" (weight 200).
+const SWAP = "M290-220 160-350l130-130 28.31 28.31L236.62-370H560v40H236.62l81.69 81.69L290-220Zm380-260-28.31-28.31L723.38-590H400v-40h323.38l-81.69-81.69L670-740l130 130-130 130Z";
+function swap() {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 -960 960 960");
+  svg.setAttribute("fill", "currentColor");
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", SWAP);
+  svg.append(path);
+  return svg;
+}
 
 // Deleting one annotation is confirmed with a button (undo brings it back, too).
 function deleteDialog(shape, label) {
@@ -213,7 +486,7 @@ function render(state) {
       }, chevron()),
       h("input", { type: "color", value: c.color, title: "Drawing color", onclick: (e) => e.stopPropagation(), onchange: (e) => update(c, { color: e.target.value }) }),
       nameEl,
-      h("button", { class: "edit", title: "Rename", onclick: (e) => (e.stopPropagation(), startRename(c)) }, "✎"),
+      h("button", { class: "edit", title: "Rename", onclick: (e) => (e.stopPropagation(), startRename(c)) }, pen()),
       shapes && h("span", { class: "count" + (count ? " has" : ""), title: `${count} shape${count === 1 ? "" : "s"} of ${c.name} in this image` }, String(count)),
       h("button", {
         class: "eye" + (hidden ? " off" : ""),
@@ -229,20 +502,33 @@ function render(state) {
           onkeydown: (e) => { if (e.key === "Enter") e.target.blur(); if (e.key === "Escape") { naming = null; render(shared.get()); } },
           onblur: (e) => naming === s.id && renameShape(s, e.target.value) })
         : h("span", { class: "name" + (s.name ? "" : " generic"), title: (s.name || generic) + " · double-click to rename", ondblclick: (e) => { e.stopPropagation(); naming = s.id; render(shared.get()); } }, s.name || generic);
-      return h("div", {
+      const talk = said(s.id);
+      const last = talk[talk.length - 1];
+      const row = h("div", {
         class: "shape" + (picked === s.id ? " picked" : "") + (menu?.shape === s ? " menu-open" : ""), title: "Show in the viewer", onclick: () => pick(s),
         oncontextmenu: (e) => { e.preventDefault(); menu = { x: e.clientX, y: e.clientY, shape: s, label: s.name || generic }; render(shared.get()); },
       },
-        thumbnail(s, c.color), label,
-        h("button", { class: "edit", title: "Rename (an empty name gives back the generic one)", onclick: (e) => { e.stopPropagation(); naming = s.id; render(shared.get()); } }, "✎"));
+        thumbnail(s, c.color),
+        h("div", { class: "text-col" }, label,
+          last && !threadOpen(s) && (resolved[s.id]
+            ? h("span", { class: "said resolved", title: `${last.author}: ${last.text}` }, check(), `Resolved by ${resolved[s.id].author}`)
+            : h("span", { class: "said", title: `${last.author}: ${last.text}` }, h("b", {}, last.author + ": "), preview(last.text)))),
+        h("button", { class: "edit", title: "Rename (an empty name gives back the generic one)", onclick: (e) => { e.stopPropagation(); naming = s.id; render(shared.get()); } }, pen()),
+        h("button", {
+          class: "talk" + (talk.length ? " has" : "") + (resolved[s.id] ? " resolved" : "") + (threadOpen(s) ? " open" : ""),
+          title: threadOpen(s) ? "Hide the conversation" : talk.length ? `${talk.length} comment${talk.length === 1 ? "" : "s"}${resolved[s.id] ? " (resolved)" : ""}; show the conversation` : "Comment on this shape",
+          onclick: (e) => { e.stopPropagation(); toggleThread(s); },
+        }, bubble(), talk.length ? String(talk.length) : ""));
+      return threadOpen(s) ? [row, thread(s)] : row;
     });
-    return [row, h("div", { class: "shapes" + (hidden ? " hidden" : "") }, items)];
+    return [row, h("div", { class: "shapes" + (hidden ? " hidden" : "") }, items.flat())];
   });
   const scroll = app.querySelector(".list")?.scrollTop ?? 0;
+  const typing = document.activeElement?.matches?.("textarea.compose")
+    ? { id: document.activeElement.dataset.shape, edit: document.activeElement.classList.contains("edit-comment"),
+      start: document.activeElement.selectionStart, end: document.activeElement.selectionEnd } : null;
   if (menu && !shapes?.includes(menu.shape)) menu = null; // the shapes were reloaded
-  const contextMenu = menu && h("div", { class: "menu", role: "menu", style: `left:${menu.x}px;top:${menu.y}px`, onkeydown: (e) => e.key === "Escape" && closeMenu() },
-    h("button", { class: "item danger", role: "menuitem", onclick: () => { const { shape, label } = menu; closeMenu(); deleteDialog(shape, label); } },
-      trash(), "Delete annotation…"));
+  const contextMenu = menu && h("div", { class: "menu", role: "menu", style: `left:${menu.x}px;top:${menu.y}px`, onkeydown: menuKeys }, menuItems(project));
   const list = h("div", { class: "list" }, rows.flat(), !rows.length && h("div", { class: "empty" }, "No classes yet. Add one to start drawing."));
   app.replaceChildren(
     h("div", { class: "head" }, h("strong", {}, "Classes"), h("button", { onclick: () => addDialog(project) }, "+ Add")),
@@ -254,11 +540,22 @@ function render(state) {
     const box = contextMenu.getBoundingClientRect();
     contextMenu.style.left = `${Math.max(4, Math.min(menu.x, innerWidth - box.width - 4))}px`;
     contextMenu.style.top = `${Math.max(4, Math.min(menu.y, innerHeight - box.height - 4))}px`;
-    contextMenu.querySelector("button")?.focus();
+    contextMenu.querySelector("button.item:not(:disabled):not(.back)")?.focus();
   }
   list.scrollTop = scroll;
   const input = app.querySelector("input.rename");
   if (input) (input.focus(), input.select());
+  else {
+    const id = typing?.id ?? composeFocus;
+    const boxes = id ? [...app.querySelectorAll("textarea.compose")].filter((t) => t.dataset.shape === id) : [];
+    const box = boxes.find((t) => t.classList.contains("edit-comment") === !!(typing ? typing.edit : editingComment)) ?? boxes[0];
+    if (box) {
+      box.focus();
+      if (typing) box.setSelectionRange(typing.start, typing.end);
+      else (box.setSelectionRange(box.value.length, box.value.length), box.scrollIntoView({ block: "nearest" }));
+    }
+  }
+  composeFocus = null;
 }
 
 function show(e) {

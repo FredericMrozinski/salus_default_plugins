@@ -94,9 +94,15 @@ class Workbench:
     def source_changed(self, source_id: str) -> None:
         """After a scan, an ingest or an upload: refreshes the states of all cells that reference the source."""
         self.notify({"type": "source_changed", "source": source_id})
-        for dataset in self.datasets.datasets_referencing(source_id):
+        referencing = self.datasets.datasets_referencing(source_id)
+        for dataset in referencing:
             dataset.recompute(source_id=source_id)
-            self.notify({"type": "dataset_changed", "dataset": dataset.id})
+        changed = {d.id for d in referencing}
+        for dataset in self.datasets.automated(source_id):
+            if any(dataset.run_automation().values()):
+                changed.add(dataset.id)
+        for dataset_id in sorted(changed):
+            self.notify({"type": "dataset_changed", "dataset": dataset_id})
 
     def configure_table(self, source_id: str, columns: list, auto_key: bool = False) -> dict:
         source = self.catalog.find_source(source_id)
@@ -195,15 +201,34 @@ class Workbench:
         dataset = self.datasets.get(dataset_id)
 
         def work(progress):
-            for source_id in dataset.referenced_sources():
+            for source_id in sorted(set(dataset.referenced_sources()) | dataset.automation_sources()):
                 source = self.catalog.try_source(source_id)
                 if source is not None:
                     source.refresh(progress)
             dataset.recompute()
+            result = dataset.run_automation()
             self.notify({"type": "dataset_changed", "dataset": dataset.id})
-            return {}
+            return result
 
         return self.start_job("check", dataset_id, work)
+
+    def set_automation(self, dataset_id: str, raw) -> dict:
+        """Saves the automation settings and applies them in the background (a job "automation")."""
+        dataset = self.datasets.get(dataset_id)
+        config = dataset.set_automation(raw)
+        self.notify({"type": "dataset_changed", "dataset": dataset.id, "schema": True})
+        self.run_automation(dataset_id)
+        return config
+
+    def run_automation(self, dataset_id: str) -> dict:
+        dataset = self.datasets.get(dataset_id)
+
+        def work(progress):
+            result = dataset.run_automation()
+            self.notify({"type": "dataset_changed", "dataset": dataset.id})
+            return result
+
+        return self.start_job("automation", dataset_id, work)
 
     def set_state(self, dataset, entry) -> dict:
         self.state = {"dataset": dataset, "entry": entry}

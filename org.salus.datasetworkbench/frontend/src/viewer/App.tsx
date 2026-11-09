@@ -3,7 +3,9 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useDebounced } from "../shared/hooks";
 import { api, encode, initialNav, navigate, onEvent, onNav, setState } from "../shared/salus";
 import type { DatasetDetail, EntryPage, EntryRow, EntryState, Nav, Stats } from "../shared/types";
+import { Icon } from "../shared/icons";
 import { Badge, Empty, ErrorLine } from "../shared/ui";
+import { AutomationDialog } from "./AutomationDialog";
 
 const ROW = 46;
 const PAGE = 50;
@@ -36,6 +38,7 @@ function Viewer({ dataset, selected, onSelect }: { dataset: string; selected: nu
   const detail = useQuery({ queryKey: ["dataset", dataset], queryFn: () => api<DatasetDetail>("GET", `/datasets/${encode(dataset)}`) });
   const [filter, setFilter] = useState<EntryState | "">("");
   const [search, setSearch] = useState("");
+  const [automating, setAutomating] = useState(false);
   const q = useDebounced(search, 250);
 
   // Opening a dataset re-checks its references in the background; the results arrive as events.
@@ -60,12 +63,22 @@ function Viewer({ dataset, selected, onSelect }: { dataset: string; selected: nu
   });
 
   const schema = detail.data?.schema ?? [];
+  const automated = Object.keys(detail.data?.automation?.rules ?? {}).length > 0;
   return (
     <div className="app">
       <div className="toolbar">
         <h2 title={detail.data?.name}>{detail.data?.name ?? dataset}</h2>
         <button className="small" title="Change the fields of every entry" onClick={() => navigate("entry-editor", { type: "edit_schema", dataset })}>
           Edit schema
+        </button>
+        <button
+          className={`small ${automated ? "automation-on" : ""}`}
+          disabled={!detail.data || schema.length === 0}
+          title={schema.length === 0 ? "Define the schema first" : automated ? "Automation is on: entries are created and filled on every refresh" : "Create and fill entries automatically"}
+          onClick={() => setAutomating(true)}
+        >
+          <Icon name="bolt" size={16} />
+          Automation
         </button>
         <button className="small primary" disabled={add.isPending || schema.length === 0} title={schema.length === 0 ? "Define the schema first" : "Add an entry"} onClick={() => add.mutate()}>
           + Entry
@@ -81,6 +94,7 @@ function Viewer({ dataset, selected, onSelect }: { dataset: string; selected: nu
         </select>
       </div>
       <ErrorLine error={detail.error ?? add.error} />
+      {automating && detail.data && <AutomationDialog dataset={detail.data} onClose={() => setAutomating(false)} />}
       {detail.data && schema.length === 0 && <Empty>This dataset has no fields yet. Use “Edit schema”.</Empty>}
       <EntryList dataset={dataset} slots={schema.map((s) => String(s.id))} filter={filter} q={q} selected={selected} onSelect={open} />
       <StatsFooter dataset={dataset} filter={filter} onFilter={setFilter} />

@@ -1,16 +1,17 @@
 html, body { height: 100%; }
 body { display: flex; margin: 0; }
-#targets { display: flex; flex-direction: column; gap: 2px; flex: 0 0 220px; padding: var(--salus-space-2); overflow-y: auto;
-           border-right: 1px solid var(--salus-border); background: var(--salus-surface-alt); box-sizing: border-box; }
+/* The side bar is a salus-section (foreground-1, from the Salus theme); a 2px groove separates it from the settings. */
+#targets { display: flex; flex-direction: column; gap: 2px; flex: 0 0 220px; padding: var(--salus-space-2); overflow-y: auto; box-sizing: border-box;
+           border-right: 2px solid var(--salus-separator-dark); border-image: linear-gradient(to right, var(--salus-separator-dark) 50%, var(--salus-separator-light) 50%) 0 100% 0 0; }
 #targets button { text-align: left; border: none; background: transparent; padding: 7px var(--salus-space-2); border-radius: var(--salus-radius);
                   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
-#targets button:hover { background: var(--salus-surface-2); }
-#targets button.selected { background: var(--salus-accent); color: var(--salus-accent-fg); }
-#targets .separator { margin: var(--salus-space-1) var(--salus-space-2); border-top: 1px solid var(--salus-border); }
+#targets button:hover { background: var(--salus-depth-default); }
+#targets button.selected { background: var(--salus-depth-foreground-2); box-shadow: inset 3px 0 var(--salus-accent); }
+#targets .separator { margin: var(--salus-space-1) var(--salus-space-2); border-top: 1px solid var(--salus-separator-dark); border-bottom: 1px solid var(--salus-separator-light); }
 #detail { flex: 1; min-width: 0; padding: var(--salus-space-3) var(--salus-space-4); overflow-y: auto; box-sizing: border-box; }
 h1 { margin: 0 0 var(--salus-space-3); font-size: 18px; }
 .muted { color: var(--salus-fg-faint); }
-.setting { max-width: 640px; padding: var(--salus-space-3) 0; border-bottom: 1px solid var(--salus-border); }
+.setting { max-width: 640px; padding: var(--salus-space-3) 0; border-bottom: 2px solid var(--salus-separator-dark); border-image: var(--salus-separator-below); }
 .setting .head { display: flex; align-items: baseline; gap: var(--salus-space-2); margin-bottom: 4px; }
 .setting label { font-weight: 600; }
 .setting .key { color: var(--salus-fg-faint); font-family: var(--salus-font-mono); font-size: 0.85em; }
@@ -25,7 +26,7 @@ h1 { margin: 0 0 var(--salus-space-3); font-size: 18px; }
 .setting .control .plugin-list { flex: 1 1 100%; min-width: 0; display: flex; flex-direction: column; gap: var(--salus-space-2); }
 .plugin-list .plugin-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .plugin-list .plugin-rows li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px var(--salus-space-2); padding: 4px var(--salus-space-2);
-                               border: 1px solid var(--salus-border); border-radius: var(--salus-radius); background: var(--salus-surface-alt); }
+                               border: 1px solid var(--salus-border); border-radius: var(--salus-radius); background: var(--salus-depth-default); }
 .plugin-list .plugin-text { flex: 1 1 160px; min-width: 0; display: flex; flex-direction: column; }
 .plugin-list .plugin-id { font-family: var(--salus-font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .plugin-list .plugin-name { color: var(--salus-fg-muted); font-size: 0.9em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

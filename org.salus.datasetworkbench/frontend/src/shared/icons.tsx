@@ -13,13 +13,17 @@ const PATHS = {
   edit: "M200-200h43.92l427.93-427.92-43.93-43.93L200-243.92V-200Zm-40 40v-100.77l527.23-527.77q6.15-5.48 13.57-8.47 7.43-2.99 15.49-2.99t15.62 2.54q7.55 2.54 13.94 9.15l42.69 42.93q6.61 6.38 9.04 14 2.42 7.63 2.42 15.25 0 8.13-2.74 15.56-2.74 7.42-8.72 13.57L260.77-160H160Zm600.77-556.31-44.46-44.46 44.46 44.46ZM649.5-649.5l-21.58-22.35 43.93 43.93-22.35-21.58Z",
   copy: "M364.62-280q-27.62 0-46.12-18.5Q300-317 300-344.62v-430.76q0-27.62 18.5-46.12Q337-840 364.62-840h310.76q27.62 0 46.12 18.5Q740-803 740-775.38v430.76q0 27.62-18.5 46.12Q703-280 675.38-280H364.62Zm0-40h310.76q9.24 0 16.93-7.69 7.69-7.69 7.69-16.93v-430.76q0-9.24-7.69-16.93-7.69-7.69-16.93-7.69H364.62q-9.24 0-16.93 7.69-7.69 7.69-7.69 16.93v430.76q0 9.24 7.69 16.93 7.69 7.69 16.93 7.69Zm-120 160q-27.62 0-46.12-18.5Q180-197 180-224.61v-470.77h40v470.77q0 9.23 7.69 16.92 7.69 7.69 16.93 7.69h350.76v40H244.62ZM340-320v-480 480Z",
   delete: "M304.62-160q-26.85 0-45.74-18.88Q240-197.77 240-224.62V-720h-40v-40h160v-30.77h240V-760h160v40h-40v495.38q0 27.62-18.5 46.12Q683-160 655.38-160H304.62ZM680-720H280v495.38q0 10.77 6.92 17.7 6.93 6.92 17.7 6.92h350.76q9.24 0 16.93-7.69 7.69-7.69 7.69-16.93V-720ZM392.31-280h40v-360h-40v360Zm135.38 0h40v-360h-40v360ZM280-720v520-520Z",
+  // bolt_24dp_1F1F1F_FILL0_wght200_GRAD0_opsz24.svg: drawn on a 24 unit grid (VIEW_BOX below)
+  bolt: "M10.55,18.2L15.73,12h-4l0.72-5.68L7.83,13H11.3l-0.75,5.2Zm-1.4,2.68l1-6.88H5.9L13.38,3.21h0.46L12.87,11h5L9.62,20.88H9.15Zm2.62-8.63Z",
 } as const;
 
 export type IconName = keyof typeof PATHS;
 
+const VIEW_BOX: Partial<Record<IconName, string>> = { bolt: "0 0 24 24" };
+
 export function Icon({ name, size = 20, title, ...rest }: { name: IconName; size?: number; title?: string } & Omit<SVGProps<SVGSVGElement>, "name">) {
   return (
-    <svg className="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960" width={size} height={size} fill="currentColor" role={title ? "img" : undefined} aria-hidden={title ? undefined : true} {...rest}>
+    <svg className="icon" xmlns="http://www.w3.org/2000/svg" viewBox={VIEW_BOX[name] ?? "0 -960 960 960"} width={size} height={size} fill="currentColor" role={title ? "img" : undefined} aria-hidden={title ? undefined : true} {...rest}>
       {title && <title>{title}</title>}
       <path d={PATHS[name]} />
     </svg>

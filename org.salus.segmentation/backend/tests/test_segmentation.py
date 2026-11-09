@@ -223,6 +223,26 @@ class AnnotationTest(Base):
         with self.assertRaises(ViewerError):
             store.add_polygon([[0, 0], [1, 1]], self.cls["id"])
 
+    def test_class_of_a_shape_can_be_changed(self):
+        store = self.store()
+        stroma = self.project.add_class("Stroma", "#00ff00")
+        store.add_polygon(SQUARE, self.cls["id"])
+        store.add_polygon([[50, 50], [150, 50], [150, 150], [50, 150]], stroma["id"])  # overlaps the square
+        store.rename(store.shapes[0].id, "Mine")
+        first = store.shapes[0].id
+        self.assertTrue(store.set_class(first, stroma["id"]))
+        self.assertEqual([s.class_id for s in store.shapes], [stroma["id"], stroma["id"]])  # not merged
+        self.assertEqual((store.shapes[0].id, store.shapes[0].name, store.shapes[0].geometry.area), (first, "Mine", 10000))
+        feature = json.loads((self.dir / "save/annotations/a.svs.geojson").read_text())["features"][0]
+        self.assertEqual((feature["properties"]["class_id"], feature["properties"]["classification"]["name"]), (stroma["id"], "Stroma"))
+        self.assertFalse(store.set_class(first, stroma["id"]))  # already that class
+        with self.assertRaises(ViewerError):
+            store.set_class(first, 99)
+        with self.assertRaises(ViewerError):
+            store.set_class("nope", self.cls["id"])
+        self.assertTrue(store.undo())
+        self.assertEqual(store.shapes[0].class_id, self.cls["id"])
+
     def test_files_of_other_tools_match_classes_by_name(self):
         file = self.dir / "save/annotations/a.svs.geojson"
         file.parent.mkdir(parents=True, exist_ok=True)

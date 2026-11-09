@@ -193,6 +193,15 @@ class Source:
     def delete_item(self, rel_path: str, referenced: set[str]) -> None:
         raise WorkbenchError("Items of this source cannot be deleted.")
 
+    # -- automation (automation.py)
+    def all_items(self, extensions=None, columns=None) -> list[str]:
+        """Ids of every current item (what a dataset's automation turns into entries)."""
+        return []
+
+    def lookup(self, label: str, columns=None) -> list[str]:
+        """Ids of the items a derived text names (a relative path, a file name or a row key)."""
+        return []
+
 
 def open_source(path: Path) -> Source:
     db = Path(path) / SOURCE_DB
@@ -398,6 +407,27 @@ class FileSource(Source):
         with self.connect() as conn:
             return [{"item": r["id"], "label": r["rel_path"], "detail": f"{r['size'] or 0:,} bytes"}
                     for r in conn.execute(sql, [*args, limit, offset])]
+
+    def all_items(self, extensions=None, columns=None) -> list[str]:
+        sql, args = "SELECT id FROM items WHERE status!='missing'", []
+        if extensions:
+            sql += f" AND ext IN ({','.join('?' * len(extensions))})"
+            args += [e.lower() for e in extensions]
+        with self.connect() as conn:
+            return [r[0] for r in conn.execute(sql + " ORDER BY rel_path", args)]
+
+    def lookup(self, label: str, columns=None) -> list[str]:
+        """The item at this relative path; otherwise every item with this file name (when `label` has no folder)."""
+        label = label.strip().strip("/")
+        with self.connect() as conn:
+            row = conn.execute("SELECT id FROM items WHERE rel_path=? AND status!='missing'", (label,)).fetchone()
+            if row:
+                return [row[0]]
+            if not label or "/" in label:
+                return []
+            rows = conn.execute("SELECT id, rel_path FROM items WHERE status!='missing' AND rel_path LIKE ? ESCAPE '\\'",
+                                (f"%/{like_escape(label)}",))
+            return [r["id"] for r in rows if r["rel_path"].rsplit("/", 1)[-1] == label]
 
     def _range(self, rel_dir: str) -> tuple[str, str]:
         prefix = rel_dir + "/"
@@ -758,6 +788,19 @@ class TableSource(Source):
                 for r in rows:
                     found[r["_key"]] = (row_fingerprint(cols, [r[c] for c in cols]), r["_key"])
         return found
+
+    def all_items(self, extensions=None, columns=None) -> list[str]:
+        if not self._columns_for(columns) or not self._has_data():
+            return []
+        with self.connect() as conn:
+            return [r[0] for r in conn.execute("SELECT _key FROM data ORDER BY _row")]
+
+    def lookup(self, label: str, columns=None) -> list[str]:
+        if not self._columns_for(columns) or not self._has_data():
+            return []
+        with self.connect() as conn:
+            row = conn.execute("SELECT _key FROM data WHERE _key=?", (label.strip(),)).fetchone()
+        return [row[0]] if row else []
 
     def describe(self, item_id: str, columns=None) -> dict | None:
         cols = self._columns_for(columns)

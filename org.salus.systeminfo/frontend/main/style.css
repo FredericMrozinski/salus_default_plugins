@@ -4,13 +4,14 @@ header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 14px; f
 header h1 { margin: 0; font-size: 18px; }
 header .grow { flex: 1; }
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
-.card { background: var(--salus-surface, #1b1e25); border: 1px solid var(--salus-border, #2a2d35); border-radius: 8px; padding: 12px 14px; }
-.card h2 { margin: 0 0 8px; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--salus-fg-muted, #a9adba); }
+/* the cards are salus-card (foreground-1, raised outline) with a salus-title heading, from the Salus theme */
+.card { padding: 12px 14px; }
+.card h2 { margin: 0 0 8px; }
 .card .big { font-size: 20px; font-weight: 600; margin-bottom: 6px; overflow-wrap: anywhere; }
 dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; }
 dt { color: var(--salus-fg-muted, #a9adba); }
 dd { margin: 0; overflow-wrap: anywhere; }
-.bar { height: 8px; border-radius: 4px; background: var(--salus-surface-3, #33373f); overflow: hidden; margin: 8px 0 10px; }
+.bar { height: 8px; border-radius: 4px; background: var(--salus-depth-background-2); overflow: hidden; margin: 8px 0 10px; }
 .bar > div { height: 100%; background: var(--salus-accent, #3a6df0); }
 .bar.high > div { background: var(--salus-danger, #ff6369); }
 .yes { color: var(--salus-success, #3fb950); }
@@ -20,8 +21,8 @@ dd { margin: 0; overflow-wrap: anywhere; }
 header button + button { margin-left: 6px; }
 .notes { margin: 8px 0 0; padding-left: 18px; font-size: 12px; }
 .backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, .45); display: grid; place-items: center; z-index: 20; padding: 12px; }
-.dialog { background: var(--salus-surface, #1b1e25); border: 1px solid var(--salus-border, #2a2d35); border-radius: 8px; width: min(760px, 100%); max-height: 100%; display: flex; flex-direction: column; }
-.dialog > header { padding: 10px 14px; font-weight: 600; border-bottom: 1px solid var(--salus-border, #2a2d35); }
+.dialog { background: var(--salus-depth-foreground-1); border: 1px solid var(--salus-border, #2a2d35); border-radius: 8px; width: min(760px, 100%); max-height: 100%; display: flex; flex-direction: column; }
+.dialog > header { padding: 10px 14px; font-weight: 600; border-bottom: 2px solid var(--salus-separator-dark); border-image: var(--salus-separator-below); }
 .dialog > .content { padding: 12px 14px; overflow: auto; min-height: 0; }
-.dialog > footer { padding: 10px 14px; border-top: 1px solid var(--salus-border, #2a2d35); display: flex; gap: 8px; justify-content: flex-end; }
+.dialog > footer { padding: 10px 14px; border-top: 2px solid var(--salus-separator-dark); border-image: var(--salus-separator-above); display: flex; gap: 8px; justify-content: flex-end; }
 .diagnostics { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }

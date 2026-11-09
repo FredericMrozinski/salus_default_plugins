@@ -1,25 +1,24 @@
-/* Workbench styles. Colors come from the Salus theme variables (--salus-*), so the light/dark switch just works. */
+/* Workbench styles. Colors come from the Salus theme (--salus-*): buttons, fields and the page from its defaults, and the
+   depth levels: bars and floating things (menus, dialogs) are foreground-1, rows default, the selected row foreground-2. */
 html, body, #root { height: 100%; }
 body { overflow: hidden; }
 #root { display: flex; flex-direction: column; min-height: 0; }
 
 .app { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .scroll { flex: 1; min-height: 0; overflow: auto; }
-.toolbar { display: flex; align-items: center; gap: var(--salus-space-1); padding: var(--salus-space-2); border-bottom: 1px solid var(--salus-border); background: var(--salus-surface); }
+.toolbar { display: flex; align-items: center; gap: var(--salus-space-1); padding: var(--salus-space-2); border-bottom: 2px solid var(--salus-separator-dark); border-image: var(--salus-separator-below); background: var(--salus-depth-foreground-1); }
 .toolbar .grow { flex: 1; min-width: 0; }
 .toolbar h2 { margin: 0; font-size: 13px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.footer { border-top: 1px solid var(--salus-border); background: var(--salus-surface); padding: var(--salus-space-2); font-size: 12px; }
+.footer { border-top: 2px solid var(--salus-separator-dark); border-image: var(--salus-separator-above); background: var(--salus-depth-foreground-1); padding: var(--salus-space-2); font-size: 12px; }
 
-.tabs { display: flex; border-bottom: 1px solid var(--salus-border); background: var(--salus-surface); }
+.tabs { display: flex; border-bottom: 2px solid var(--salus-separator-dark); border-image: var(--salus-separator-below); background: var(--salus-depth-foreground-1); }
 .tab { flex: 1; border: 0; border-radius: 0; background: none; padding: var(--salus-space-2); border-bottom: 2px solid transparent; color: var(--salus-fg-muted); }
-.tab:hover:not(:disabled) { background: var(--salus-surface-2); }
+.tab:hover:not(:disabled) { background: var(--salus-depth-foreground-2); }
 .tab.active { color: var(--salus-fg); border-bottom-color: var(--salus-accent); }
 
-button.primary { background: var(--salus-accent); color: var(--salus-accent-fg); border-color: transparent; }
-button.primary:hover:not(:disabled) { background: var(--salus-accent); filter: brightness(1.1); }
 button.danger { color: var(--salus-danger); border-color: var(--salus-danger); }
 .icon-button { padding: 0 6px; min-width: 22px; height: 22px; line-height: 1; background: none; border-color: transparent; color: var(--salus-fg-muted); }
-.icon-button:hover:not(:disabled) { color: var(--salus-fg); background: var(--salus-surface-3); }
+.icon-button:hover:not(:disabled) { color: var(--salus-fg); background: var(--salus-depth-foreground-2); }
 .small { font-size: 12px; padding: 1px 8px; }
 
 .badge { display: inline-block; padding: 0 6px; border-radius: 9px; font-size: 11px; line-height: 17px; white-space: nowrap; border: 1px solid transparent; }
@@ -36,9 +35,9 @@ button.danger { color: var(--salus-danger); border-color: var(--salus-danger); }
 
 /* Modal */
 .modal-backdrop { position: fixed; inset: 0; background: var(--salus-overlay); display: flex; align-items: flex-start; justify-content: center; padding: 28px 10px; z-index: 50; overflow: auto; }
-.modal { background: var(--salus-surface); border: 1px solid var(--salus-border); border-radius: var(--salus-radius); box-shadow: var(--salus-shadow); width: min(440px, 100%); }
+.modal { background: var(--salus-depth-foreground-1); border: 1px solid var(--salus-border); border-radius: var(--salus-radius); box-shadow: var(--salus-shadow); width: min(440px, 100%); }
 .modal-wide { width: min(720px, 100%); }
-.modal-head { display: flex; align-items: center; justify-content: space-between; padding: var(--salus-space-2) var(--salus-space-3); border-bottom: 1px solid var(--salus-border); }
+.modal-head { display: flex; align-items: center; justify-content: space-between; padding: var(--salus-space-2) var(--salus-space-3); border-bottom: 2px solid var(--salus-separator-dark); border-image: var(--salus-separator-below); }
 .modal-head h3 { margin: 0; font-size: 14px; }
 .modal-body { padding: var(--salus-space-3); display: flex; flex-direction: column; gap: var(--salus-space-3); }
 .modal-actions { display: flex; justify-content: flex-end; gap: var(--salus-space-2); }
@@ -53,21 +52,21 @@ input[type=checkbox], input[type=radio] { width: auto; flex: none; }
 .check { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
 
 /* Reference picker */
-.picker { position: absolute; z-index: 20; left: 0; right: 0; top: 100%; margin-top: 2px; background: var(--salus-surface); border: 1px solid var(--salus-border); border-radius: var(--salus-radius); box-shadow: var(--salus-shadow); padding: var(--salus-space-2); display: flex; flex-direction: column; gap: var(--salus-space-2); }
+.picker { position: absolute; z-index: 20; left: 0; right: 0; top: 100%; margin-top: 2px; background: var(--salus-depth-foreground-1); border: 1px solid var(--salus-border); border-radius: var(--salus-radius); box-shadow: var(--salus-shadow); padding: var(--salus-space-2); display: flex; flex-direction: column; gap: var(--salus-space-2); }
 .picker input { width: 100%; }
 .picker-list { max-height: 260px; overflow: auto; display: flex; flex-direction: column; }
 .picker-item { display: flex; flex-direction: column; align-items: flex-start; text-align: left; border: 0; border-radius: 4px; background: none; padding: 4px 6px; }
-.picker-item:hover { background: var(--salus-surface-2); }
+.picker-item:hover { background: var(--salus-depth-foreground-2); }
 .picker-label { color: var(--salus-fg); word-break: break-all; }
 .picker-detail { color: var(--salus-fg-faint); font-size: 11px; }
 
 /* Context menu */
-.context-menu { position: fixed; z-index: 100; min-width: 170px; max-width: 280px; background: var(--salus-surface); border: 1px solid var(--salus-border); border-radius: var(--salus-radius); box-shadow: var(--salus-shadow); padding: 3px; }
+.context-menu { position: fixed; z-index: 100; min-width: 170px; max-width: 280px; background: var(--salus-depth-foreground-1); border: 1px solid var(--salus-border); border-radius: var(--salus-radius); box-shadow: var(--salus-shadow); padding: 3px; }
 .context-item { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; border: 0; background: none; border-radius: 4px; padding: 4px 10px; white-space: nowrap; }
-.context-item:hover:not(:disabled) { background: var(--salus-accent); color: var(--salus-accent-fg); }
+.context-item:hover:not(:disabled) { background: var(--salus-depth-foreground-2); }
 .context-item.danger-text { color: var(--salus-danger); }
 .context-item.danger-text:hover:not(:disabled) { background: var(--salus-danger); color: #fff; }
-.context-separator { height: 1px; background: var(--salus-border); margin: 3px 2px; }
+.context-separator { height: 0; border-top: 1px solid var(--salus-separator-dark); border-bottom: 1px solid var(--salus-separator-light); margin: 3px 2px; }
 
 /* Icons (shared/icons.tsx) */
 .icon { flex: none; display: inline-block; vertical-align: middle; }

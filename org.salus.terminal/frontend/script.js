@@ -21,10 +21,10 @@ function applyTheme() {
   const css = getComputedStyle(document.documentElement);
   const color = (name) => css.getPropertyValue(name).trim();
   term.options.theme = {
-    background: color("--salus-bg"),
+    background: color("--salus-depth-default"),
     foreground: color("--salus-fg"),
     cursor: color("--salus-accent"),
-    cursorAccent: color("--salus-bg"),
+    cursorAccent: color("--salus-depth-default"),
     selectionBackground: /^#[0-9a-f]{6}$/i.test(color("--salus-accent")) ? `${color("--salus-accent")}66` : undefined,
   };
 }

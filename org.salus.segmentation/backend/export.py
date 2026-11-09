@@ -3,7 +3,8 @@
 The map has the size of the image's full-resolution level (divided by the chosen downsample) and the same coordinates as
 the annotations. Where shapes of different classes overlap, the class that comes first in the export settings wins.
 The map is drawn in tiles (Pillow), so memory stays small for gigapixel slides; libvips joins the tiles and writes the
-pyramid. Compression is lossless (deflate), so the colors stay exact.
+pyramid. Compression is lossless (deflate), and the pyramid's smaller levels take the most common color of each block
+(not the mean), so every level holds only the class and background colors.
 """
 from __future__ import annotations
 
@@ -231,7 +232,9 @@ class ExportJob:
             target.parent.mkdir(parents=True, exist_ok=True)
             # The resolution (pixels per millimetre), so that viewers show the right scale; libvips writes it in the unit given.
             resolution = {"xres": 1000 / (mpp * downsample), "yres": 1000 / (mpp * downsample), "resunit": "cm"} if mpp else {}
-            mask.tiffsave(str(part), tile=True, tile_width=OUT_TILE, tile_height=OUT_TILE, pyramid=True,
+            # The smaller pyramid levels take the most common color of each 2 x 2 block (mode), not the mean: averaging
+            # would make up colors that are no class's where classes meet.
+            mask.tiffsave(str(part), tile=True, tile_width=OUT_TILE, tile_height=OUT_TILE, pyramid=True, region_shrink="mode",
                           compression="deflate", predictor="horizontal", bigtiff=True, **resolution)
             os.replace(part, target)
             item.update(status="done", percent=100.0, message=f"{math.ceil(width / downsample)} × {math.ceil(height / downsample)} px")

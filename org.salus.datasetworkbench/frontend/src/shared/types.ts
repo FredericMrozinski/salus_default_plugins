@@ -69,7 +69,16 @@ export type DatasetSummary = {
   slots: number;
   error?: string;
 };
-export type DatasetDetail = DatasetSummary & { schema: Slot[] };
+export type AutomationRule = { mode: "source" } | { mode: "derive"; from: number; read: string; value: string };
+/** Keyed by slot id; a slot without a rule is left empty. */
+export type Automation = { rules: Record<string, AutomationRule> };
+export type AutomationPreview = {
+  samples: string[];
+  sample: string;
+  error: string | null;
+  results: Record<string, { text: string | null; error: string | null; note: string | null }>;
+};
+export type DatasetDetail = DatasetSummary & { schema: Slot[]; automation?: Automation };
 
 export type EntryRow = { id: number; state: EntryState; cells: Record<string, { text: string | null; state: CellState }> };
 export type EntryPage = { total: number; entries: EntryRow[] };

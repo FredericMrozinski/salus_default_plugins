@@ -5,21 +5,22 @@ body {
     height: 100vh;
     display: flex;
     flex-direction: column;
-    background: #101216;
-    color: #cfd3dc;
+    background: var(--salus-depth-background-1, #101216);
+    color: var(--salus-fg, #cfd3dc);
 }
 
+/* the image lies deepest: background-2; the status line is a footer (foreground-1) */
 #viewer {
     flex: 1;
     min-height: 0;
-    background: #101216;
+    background: var(--salus-depth-background-2, #101216);
 }
 
 #status {
     padding: 6px 10px;
     font-size: 12px;
-    border-top: 1px solid #262a33;
-    background: #171a20;
+    border-top: 2px solid var(--salus-separator-dark); border-image: var(--salus-separator-above);
+    background: var(--salus-depth-foreground-1, #171a20);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;

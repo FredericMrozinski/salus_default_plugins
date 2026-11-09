@@ -77,7 +77,7 @@ async function load(path) {
 
 function render(listing) {
   list.replaceChildren(...listing.entries.map((entry) => {
-    const item = document.createElement("li");
+    const item = Object.assign(document.createElement("li"), { className: "salus-item" });
     const icon = createIcon(iconNameFor(entry));
     const name = Object.assign(document.createElement("span"), { className: "name", textContent: entry.name, title: entry.name });
     const size = Object.assign(document.createElement("span"), { className: "size", textContent: formatSize(entry.size) });

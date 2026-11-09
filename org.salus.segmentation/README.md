@@ -6,7 +6,7 @@ Polygon annotation of whole slide images in **annotation projects**, with export
 |---|---|---|
 | `browser` (entry) | left | Chooses the project (the picker at the top; **+** creates one, the folder button opens one) and lists its images with their folder and status, filtered by name and status. Clicking an image opens it. Opens the viewer, tools and classes; **Export**, **Statuses** and, under **⋯**, **Project information** (folders and file types) and **Import from QuPath** are here too. |
 | `viewer` | center | The image (OpenSlide or Pillow tiles in OpenSeadragon) with the annotations drawn on top. |
-| `tools` | bottom | The mode (Exact or a smart one); Pan, Brush, Eraser, Polygon; the tool width; undo / redo; the class being drawn. |
+| `tools` | bottom | In sections from left to right: the mode (Exact or Smart, stacked); Pan, Brush, Eraser, Polygon (2 × 2); the tool width (and Smart's colours); undo / redo. |
 | `classes` | right | The project's classes, with their numbers of shapes in the open image and a hide button. Click one to draw with it. **Hide annotations** at the bottom hides all shapes while held down. |
 | `export` | center | Exports pixel maps (see below). |
 
@@ -51,8 +51,24 @@ with a hidden class shows it again. Which classes are hidden is not saved; openi
 The arrow in front of a class lists its shapes in the open image, each with a small picture of its outline. Shapes are
 called *Tumor 1*, *Tumor 2*, … until they are renamed (double-click or ✎; an empty name gives back the generic one; undo
 works). Clicking a shape moves the viewer to it, zoomed so that it sits in the middle with a margin, and outlines it until
-you click beside it while panning (dragging keeps it) or draw again. Right-click a shape in the list to **delete** it
-(after confirming; undo brings it back). Names are kept in the GeoJSON as `properties.name`, where QuPath keeps the names of annotations, so names
+you click beside it while panning (dragging keeps it) or draw again. Right-click a shape in the list to **change its class** (*Change class* lists the classes; the shape keeps its
+outline and name and is not merged with shapes of its new class it overlaps; undo works) or to **delete** it
+(after confirming; undo brings it back).
+
+**Comments.** Users can discuss a shape. Picking a shape that has comments opens its conversation below it; the speech
+bubble on a shape (shown on hover, or with the number of comments) opens and closes it, and is how a conversation is
+started. Each comment shows who wrote it (the system user running the backend, `$USER`) and when; while closed, the list
+shows the first 50 characters of the latest comment. Write in the box below the conversation; Ctrl/Cmd+Enter sends.
+The arrow beside **Comment** offers **Resolve** (or **Comment and resolve**): the comments stay, but picking the shape no
+longer opens them and the list says *✓ Resolved by …*; the bubble still opens the conversation, where **Reopen** undoes
+it. Resolving and reopening show up in the conversation like comments, with who did it and when, in the order they
+happened. Anyone can resolve or reopen, and a new comment reopens the conversation. Comments (and which conversations are resolved) are kept in `<save folder>/comments/<image path>.json`,
+apart from the GeoJSON: undo and redo of the drawing leave them alone, and each change re-reads the file under a lock, so
+users with backends of their own never write over each other's comments. Comments by other users appear when the image is
+opened again or a shape is picked. They belong to the shape's id: a shape the brush merges into another gives up its id and
+its comments; a deleted shape keeps them (undo brings both back). Your own comments show ✎ and a trash can on hover:
+editing changes the text in place (Ctrl/Cmd+Enter saves, Escape gives up) and marks the comment *edited*; deleting asks you
+to type `delete`, since comments have no undo. The backend refuses to change or delete another user's comment. Names are kept in the GeoJSON as `properties.name`, where QuPath keeps the names of annotations, so names
 given in QuPath come along when importing and names given here show up in QuPath.
 
 ## Statuses
@@ -77,8 +93,9 @@ in `project.json`.
 
 ## Drawing
 
-Four tools, and the **mode** (the row of buttons above them) that says how brush, eraser and polygon work: **Exact** draws exactly
-what is drawn; the smart modes make them follow the image: **Border Growth**, and one per segmentation model (see below). The
+Four tools, and the **mode** (the buttons at the left of the tools panel) that says how brush, eraser and polygon work: **Exact**
+draws exactly what is drawn; **Smart** (Border Growth below) makes them follow the image. The model modes (see below) are not
+shown in the tools panel for now; the backend still offers them. The
 **width** (screen pixels) is the brush and eraser diameter, and in a smart mode the diameter of the inner circle.
 
 - **Pan** (`V`), or hold `Ctrl` or `Space` with any tool. The mouse wheel always zooms. The viewer takes the keyboard
@@ -282,7 +299,11 @@ Only area annotations are imported; detections, cells, points and lines are left
 
 Each image becomes `<folder>/<image path>.tif` (e.g. `case1/slide.tif`): an RGB, tiled, **pyramidal BigTIFF** with lossless (deflate)
 compression and the image's resolution (microns per pixel), the size of the image's full-resolution level divided by the downsample,
-in the same coordinates as the annotations. OpenSlide, QuPath and libvips open it. `classes.json` in the folder lists every class with
+in the same coordinates as the annotations. OpenSlide, QuPath and libvips open it. Every level holds only the class and background
+colors: the pyramid's smaller levels take the most common color of each 2 × 2 block (`region_shrink="mode"`), not the mean, which
+would make up colors that are no class's where classes meet (maps exported before this have such colors on their smaller levels;
+their full-resolution level is exact). Viewers may still show artifacts on screen: Salus' File Viewer, for one, sends its tiles to
+the browser as JPEG; the file itself is exact. `classes.json` in the folder lists every class with
 its color (hex and RGB) and priority, the background color, the downsample and which file belongs to which image.
 
 The maps are drawn in 4096-pixel tiles and joined by libvips, so memory stays small (a 157 316 × 21 227 px slide took 40 s and 1.6 GB

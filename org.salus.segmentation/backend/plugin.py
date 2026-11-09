@@ -19,6 +19,10 @@ selected class and tool. Every change is broadcast on the "events" channel, and 
   POST /annotations/polygon {image, class_id, points, simplify}
   POST /annotations/paint {image, points, radius, class_id}  /annotations/erase {image, points, radius}
   POST /annotations/undo {image}  /annotations/redo {image}  /annotations/delete {image, id}  /annotations/rename {image, id, name}
+  POST /annotations/class {image, id, class_id}  gives a shape another class (no merging; can be undone)
+  GET  /comments?image=  POST /comments {image, shape, text}   comments on shapes, by the system user (comments.py)
+  PATCH /comments {image, shape, id, text}  POST /comments/delete {image, shape, id}   one's own comments only
+  POST /comments/resolve {image, shape, resolved}   resolves a shape's conversation (or opens it again)
   POST /focus {image, bbox, id?}               the viewer zooms to a region (a shape picked in the class editor)
   POST /smartbrush/dab {image, stroke, x, y, scale, mode, inner, method}  /smartbrush/outline {image, stroke, points?, scale?, inner?, method?}
   POST /smartbrush/commit {image, stroke, class_id}  /smartbrush/cancel {stroke}
@@ -34,6 +38,7 @@ from pathlib import Path
 
 import salus_sdk as salus
 from annotations import Annotations, count_shapes, parse_points
+from comments import Comments, current_user
 from errors import ViewerError
 import qupath
 from export import ExportJob, load_shapes
@@ -666,6 +671,77 @@ def rename_shape(req):
     if store.rename(str(data.get("id")), data.get("name")):
         return changed_annotations(data.get("image"), store)
     return store.summary()
+
+
+@app.route("POST", "/annotations/class")
+@guarded
+def change_class(req):
+    """Gives a shape another class ({image, id, class_id}); a hidden class is shown again. Can be undone."""
+    data = body(req)
+    store = annotations_of(data.get("image"))
+    try:
+        class_id = int(data.get("class_id"))
+    except (TypeError, ValueError):
+        raise ViewerError("Choose a class.") from None
+    if store.set_class(str(data.get("id")), class_id):
+        reveal(class_id)
+        return changed_annotations(data.get("image"), store)
+    return store.summary()
+
+
+@app.route("GET", "/comments")
+@guarded
+def get_comments(req):
+    """The comments on the shapes of an image ({shapes: {shape id: [entries]}}, see comments.py), the resolved
+    conversations ({resolved: {shape id: the resolve entry}}) and who is writing."""
+    comments = Comments(need_project(), req.query.get("image"))
+    return {"shapes": comments.all(), "resolved": comments.resolved(), "me": current_user()}
+
+
+@app.route("POST", "/comments")
+@guarded
+def add_comment(req):
+    """Adds a comment to a shape ({image, shape, text}); the author is the system user running this backend."""
+    data = body(req)
+    image, shape_id = data.get("image"), str(data.get("shape"))
+    if not any(s.id == shape_id for s in annotations_of(image).shapes):
+        raise ViewerError("No such shape.", 404)
+    comment = Comments(need_project(), image).add(shape_id, data.get("text"))
+    broadcast({"type": "comments", "image": image, "shape": shape_id})
+    return comment
+
+
+@app.route("POST", "/comments/resolve")
+@guarded
+def resolve_comments(req):
+    """Resolves the conversation on a shape ({image, shape, resolved: true}) or opens it again (resolved: false)."""
+    data = body(req)
+    image, shape_id = data.get("image"), str(data.get("shape"))
+    entry = Comments(need_project(), image).resolve(shape_id, data.get("resolved", True) is not False)
+    broadcast({"type": "comments", "image": image, "shape": shape_id})
+    return {"entry": entry}
+
+
+@app.route("PATCH", "/comments")
+@guarded
+def edit_comment(req):
+    """Changes the text of one's own comment ({image, shape, id, text})."""
+    data = body(req)
+    image, shape_id = data.get("image"), str(data.get("shape"))
+    comment = Comments(need_project(), image).edit(shape_id, str(data.get("id")), data.get("text"))
+    broadcast({"type": "comments", "image": image, "shape": shape_id})
+    return comment
+
+
+@app.route("POST", "/comments/delete")
+@guarded
+def delete_comment(req):
+    """Deletes one's own comment ({image, shape, id}); the frontend has it confirmed by typing "delete"."""
+    data = body(req)
+    image, shape_id = data.get("image"), str(data.get("shape"))
+    Comments(need_project(), image).delete(shape_id, str(data.get("id")))
+    broadcast({"type": "comments", "image": image, "shape": shape_id})
+    return {}
 
 
 @app.route("POST", "/focus")
