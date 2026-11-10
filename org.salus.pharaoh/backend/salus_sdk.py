@@ -755,6 +755,16 @@ async def _invoke(handler: Callable, arg):
 CONFIG_DIR_ENV = "SALUS_CONFIG_DIR"
 
 
+
+def _read_umask() -> int:
+    mask = os.umask(0)  # the umask can only be read by setting it: put it back at once
+    os.umask(mask)
+    return mask
+
+
+# What a file created the usual way gets under the process' umask (set by Salus), read once at import, before any threads.
+_FILE_MODE = 0o666 & ~_read_umask()
+
 class Config:
     """The plugin's own config directory, managed by Salus.
 
@@ -830,6 +840,9 @@ class Config:
         target.parent.mkdir(parents=True, exist_ok=True)
         descriptor, temp = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", suffix=".tmp")
         try:
+            # mkstemp makes the file private (0600) whatever the umask, and the rename keeps that: the mode of a file
+            # created the usual way instead, so the umask decides (Salus' `umask` setting).
+            os.chmod(temp, _FILE_MODE)
             with os.fdopen(descriptor, "wb") as file:
                 file.write(_to_buffer(data))
             os.replace(temp, target)
@@ -972,7 +985,7 @@ class Plugin:
                 sys.exit(1)
             socket_path = sys.argv[1]
 
-        logger.info(f"Passed socket-path: {socket_path}")
+        logger.debug(f"Passed socket-path: {socket_path}")
         self._socket_path = socket_path
         self._connection: Connection | None = None
         self._loop: asyncio.AbstractEventLoop | None = None

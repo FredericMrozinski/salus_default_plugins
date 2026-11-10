@@ -16,6 +16,7 @@ let image = null; // the image shown (path relative to the project root)
 let viewer = null;
 let overlay = null; // the canvas on top of the image
 let offset = [0, 0]; // level-0 position of the image's top-left tile (OpenSlide bounds); annotations use level-0 coordinates
+let imageBounds = null; // [x, y, width, height] of the image shown, level 0: shapes and painting are drawn only inside
 let shapes = []; // [{id, class_id, polygons: [[ring, ...], ...], bbox: [x0, y0, x1, y1]}]
 let draft = null; // polygon being drawn: {points: [[x, y], ...]} in image pixels
 let stroke = null; // brush or eraser stroke being drawn: {points, radius, mode: "paint" | "erase"} in image pixels
@@ -191,6 +192,7 @@ async function openImage(path) {
   if (token !== openToken) return;
   messageEl.textContent = "";
   offset = slide.offset ?? [0, 0];
+  imageBounds = slide.bounds ?? null;
   viewer = createViewer(container, {
     Url: salus.http.url(`/slide/tiles/${slide.id}/`),
     Format: slide.format,
@@ -293,6 +295,16 @@ function draw() {
   const hidden = new Set(state?.hidden ?? []); // classes hidden in the class editor
   const hideAll = hideHeldHere || hideHeldElsewhere; // "Hide annotations" or H held down: no shapes, no outlines
 
+  // Shapes and painting are drawn only on the image (the backend cuts them to it as well); the polygon being drawn
+  // and the brush circle below are not cut, so the pointer stays visible beyond the edge.
+  ctx.save();
+  if (imageBounds) {
+    const [bx, by, bw, bh] = imageBounds;
+    ctx.beginPath();
+    ctx.rect(dpr * (t.ox + bx * t.s), dpr * (t.oy + by * t.s), dpr * bw * t.s, dpr * bh * t.s);
+    ctx.clip();
+  }
+
   // The shapes, in image coordinates.
   ctx.setTransform(dpr * t.s, 0, 0, dpr * t.s, dpr * t.ox, dpr * t.oy);
   ctx.lineJoin = "round";
@@ -369,6 +381,8 @@ function draw() {
     ctx.drawImage(preview, 0, 0);
     ctx.globalAlpha = 1;
   }
+
+  ctx.restore(); // the clip to the image ends here
 
   // Screen coordinates from here on.
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);

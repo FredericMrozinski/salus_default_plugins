@@ -77,6 +77,37 @@ def open_image(path) -> "openslide.AbstractSlide":
         raise openslide.OpenSlideError(f"neither OpenSlide nor Pillow can read it ({e})") from None
 
 
+def bounds_of(image) -> tuple[float, float, float, float]:
+    """The part of an opened image (OpenSlide or PictureSlide) the viewer shows, in level-0 pixels: (x, y, width,
+    height). OpenSlide's bounds where the scanner names them (the scanned area; the tiles show only that, see
+    DeepZoomGenerator(limit_bounds=True)), else the whole image."""
+    props = image.properties
+    width, height = image.dimensions
+
+    def prop(key, default):
+        try:
+            value = props.get(f"openslide.bounds-{key}")
+            return float(value) if value not in (None, "") else default
+        except (TypeError, ValueError):
+            return default
+
+    return prop("x", 0.0), prop("y", 0.0), prop("width", float(width)), prop("height", float(height))
+
+
+def image_bounds(path) -> tuple[float, float, float, float] | None:
+    """bounds_of for a file, opened just for this; None if it cannot be read (then nothing is clipped)."""
+    if openslide is None:
+        return None
+    try:
+        image = open_image(path)
+    except Exception:  # noqa: BLE001 - not readable: no bounds
+        return None
+    try:
+        return bounds_of(image)
+    finally:
+        image.close()
+
+
 class TileCache:
     """Encoded tiles in RAM: LRU limited by bytes, and concurrent requests for the same tile share one render."""
 
@@ -195,7 +226,7 @@ class Slide:
                     for (x, y), part in pool.map(read, origins):
                         image.paste(part, (x // step, y // step))
                 self._overview = image
-                log.info("Built the overview of %s: %dx%d px", self.path.name, *image.size)
+                log.debug("Built the overview of %s: %dx%d px", self.path.name, *image.size)
             return self._overview
 
     def _overview_tile(self, level: int, col: int, row: int):
@@ -233,6 +264,10 @@ class Slide:
         out = io.BytesIO()
         tile.convert("RGB").save(out, "JPEG", quality=JPEG_QUALITY)
         return out.getvalue()
+
+    def bounds(self) -> tuple[float, float, float, float]:
+        """See bounds_of."""
+        return bounds_of(self.slide)
 
     def info(self) -> dict:
         props = self.slide.properties
@@ -326,7 +361,7 @@ class Slides:
                     del self._by_path[str(slide.path)]
                 self.cache.drop(lambda key, id=slide.id: key[0] == id)
                 slide.close()
-                log.info("Closed %s (no viewer left)", slide.path.name)
+                log.debug("Closed %s (no viewer left)", slide.path.name)
 
     async def tile(self, slide_id: str, level: str, tile: str) -> bytes:
         slide = self.by_id.get(slide_id)
@@ -350,4 +385,4 @@ class Slides:
                 await asyncio.gather(*(self.cache.get((slide.id, level, c, r)) for c in range(cols) for r in range(rows)))
         except ViewerError:
             return  # the viewer was closed meanwhile
-        log.info("Overview levels of %s cached: %s", slide.path.name, self.cache.stats())
+        log.debug("Overview levels of %s cached: %s", slide.path.name, self.cache.stats())

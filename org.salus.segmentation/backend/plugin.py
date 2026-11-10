@@ -8,7 +8,7 @@ selected class and tool. Every change is broadcast on the "events" channel, and 
   PUT  /state {image?, class_id?, tool?, mode?, brush?, hidden?, sensitivity?}   sensitivity: Border growth's colours
                                                (the fill opacity in the state is the `fill_opacity` setting)
   ws://hide {on}                               hold-to-hide: broadcast on "events" as {type: "hide", on} (see below)
-  POST /projects {name, root, extensions, save} | /projects/open {save} | /projects/{id}/use | /projects/{id}/forget
+  POST /projects {name, root, extensions | pattern, save} | PATCH /projects/current {name, root, extensions | pattern} | /projects/open {save} | /projects/{id}/use | /projects/{id}/forget
   GET  /fs?path=                               server folders, for choosing the root and save folders
   GET  /images?rescan=1                        the images of the open project, with their shape counts and statuses
   POST /images/remove {images}  GET /images/removed  POST /images/restore {images}   (the files stay)
@@ -34,11 +34,9 @@ import functools
 import logging
 import pkgutil
 import threading
-import time
 from pathlib import Path
 
 import salus_sdk as salus
-import timing
 from annotations import Annotations, count_shapes, parse_points
 from comments import Comments, current_user
 from errors import ViewerError
@@ -46,6 +44,7 @@ import qupath
 from export import ExportJob, load_shapes
 import models
 from project import Project, Registry
+import slides as slides_module
 from slides import Slides
 
 log = logging.getLogger("segmentation")
@@ -142,8 +141,18 @@ def annotations_of(image: str) -> Annotations:
     p = need_project()
     with lock:
         store = annotation_cache.get(image)
+        if store is not None:
+            return store
+    # The image's bounds, so that no new shape reaches beyond it: read from the file once per store, outside the lock
+    # (opening a slide on network storage takes a moment). None if the file is gone or unreadable: nothing is cut.
+    try:
+        bounds = slides_module.image_bounds(p.image_path(image))
+    except ViewerError:
+        bounds = None
+    with lock:
+        store = annotation_cache.get(image)
         if store is None:
-            store = annotation_cache[image] = Annotations(p, image)
+            store = annotation_cache[image] = Annotations(p, image, bounds)
         return store
 
 
@@ -256,7 +265,8 @@ def put_state(req):
 @guarded
 def create_project(req):
     data = body(req)
-    use_project(Project.create(data.get("name"), data.get("root"), data.get("extensions", ".svs"), data.get("save")))
+    use_project(Project.create(data.get("name"), data.get("root"), data.get("extensions", ".svs"), data.get("save"),
+                               pattern=data.get("pattern")))
     return full_state()
 
 
@@ -264,6 +274,24 @@ def create_project(req):
 @guarded
 def open_project(req):
     use_project(Project.open(body(req).get("save")))
+    return full_state()
+
+
+@app.route("PATCH", "/projects/current")
+@guarded
+def edit_project(req):
+    """Changes the open project's name, image folder and image filter (file types or `pattern`, see Project.edit)."""
+    data = body(req)
+    p = need_project()
+    p.edit(data.get("name"), data.get("root"), data.get("extensions"), pattern=data.get("pattern"))
+    with lock:
+        registry.remember(p)  # the name in the project list
+        annotation_cache.clear()
+        shape_counts.clear()
+        if state["image"] and state["image"] not in p.images():
+            state["image"] = None  # the open image is no longer part of the project
+    broadcast({"type": "images"})
+    broadcast({"type": "state", "state": full_state()})
     return full_state()
 
 
@@ -326,8 +354,17 @@ def images(req):
     for rel in paths:
         if rel not in shape_counts:
             shape_counts[rel] = count_shapes(p.annotation_file(rel))
-        out.append({"path": rel, "shapes": shape_counts[rel], "status": p.status_of(rel)})
+        # For sorting the list: when the image file and its annotations last changed (seconds since 1970; None: no file).
+        out.append({"path": rel, "shapes": shape_counts[rel], "status": p.status_of(rel),
+                    "modified": mtime(p.root / rel), "edited": mtime(p.annotation_file(rel))})
     return salus.Response.json({"images": out}, headers=NO_CACHE)
+
+
+def mtime(path: Path) -> float | None:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
 
 
 @app.route("PUT", "/images/status")
@@ -454,7 +491,8 @@ async def slide_info(req):
     # like QuPath. The viewer adds this offset.
     props = slide.slide.properties
     offset = [int(props.get("openslide.bounds-x", 0) or 0), int(props.get("openslide.bounds-y", 0) or 0)]
-    return salus.Response.json({**slide.info(), "offset": offset, "cache": slides.cache.stats()}, headers=NO_CACHE)
+    return salus.Response.json({**slide.info(), "offset": offset, "bounds": list(slide.bounds()),
+                                "cache": slides.cache.stats()}, headers=NO_CACHE)
 
 
 @app.route("GET", "/slide/tiles/{slide}/{level}/{tile}")
@@ -537,31 +575,18 @@ def erase(req):
 strokes: dict[tuple[int, str], object] = {}  # (frontend id, stroke id) -> smartbrush.Stroke
 
 
-_smartbrush_loaded = False
-
-
 def smartbrush_module():
-    global _smartbrush_loaded
-    start = time.perf_counter()
     try:
-        with timing.step("import"):
-            import smartbrush
+        import smartbrush
     except ImportError as e:  # the rest of the plugin works without torch
         raise ViewerError(f"The smart brush needs PyTorch, which is not installed ({e}). Run backend/setup.sh.", 503) from None
-    if not _smartbrush_loaded:
-        _smartbrush_loaded = True
-        timing.once("import smartbrush (torch)", start)
-        try:
-            log.info("smart brush on %s, %d torch threads", smartbrush.DEVICE, smartbrush.torch.get_num_threads())
-        except Exception:  # noqa: BLE001 - only a log line
-            pass
     return smartbrush
 
 
 # The first dab of a process paid about two seconds of one-off costs: importing torch, scipy and numba, torch setting up
 # its backend on the first blur, numba compiling (or loading from its cache) the growth and the snapping. A viewer that
 # opens an image starts a warm-up in the background: one Border growth dab on a made-up picture, which pays them all, once
-# per backend process. The timing log shows it as "warm-up". A dab during the warm-up waits for what it needs (Python's
+# per backend process. A dab during the warm-up waits for what it needs (Python's
 # import lock, numba's compile lock), so it is never slower than without one.
 _warm_up_started = False
 
@@ -578,28 +603,26 @@ def start_brush_warm_up() -> None:
 def brush_warm_up() -> None:
     try:
         import numpy as np
-        with timing.measure("warm-up"):
-            sb = smartbrush_module()
-            with timing.step("import"):
-                import borderbrush
-            n = 2 * (sb.OUTER + sb.MARGIN) + 1
-            picture = np.full((4 * n, 4 * n, 3), 210, np.uint8)
-            picture[:, 2 * n:] = (120, 60, 150)  # an edge for the growth to stop at and the snapping to find
+        sb = smartbrush_module()
+        import borderbrush
+        n = 2 * (sb.OUTER + sb.MARGIN) + 1
+        picture = np.full((4 * n, 4 * n, 3), 210, np.uint8)
+        picture[:, 2 * n:] = (120, 60, 150)  # an edge for the growth to stop at and the snapping to find
 
-            def box(stroke, u0, v0, width, height=None):
-                height = width if height is None else height
-                return picture[v0:v0 + height, u0:u0 + width]  # the dabs below keep it inside the picture
+        def box(stroke, u0, v0, width, height=None):
+            height = width if height is None else height
+            return picture[v0:v0 + height, u0:u0 + width]  # the dabs below keep it inside the picture
 
-            def read(stroke, u, v):
-                return box(stroke, 0, 0, n)
+        def read(stroke, u, v):
+            return box(stroke, 0, 0, n)
 
-            read.box = box
-            for strict in (False, True):  # both colour switches (their window maps are cached apart)
-                stroke = borderbrush.BorderStroke("warm-up", "paint", 1.0, 0.0, 0.0, sb.INNER,
-                                                  sensitivity="strict" if strict else "normal")
-                stroke.to_dab(read, 2 * n - 10, 2 * n)
-                stroke.to_dab(read, 2 * n + 5, 2 * n)  # a second dab: growth from the painted border
-                stroke.geometry()  # the outline at commit
+        read.box = box
+        for strict in (False, True):  # both colour switches (their window maps are cached apart)
+            stroke = borderbrush.BorderStroke("warm-up", "paint", 1.0, 0.0, 0.0, sb.INNER,
+                                              sensitivity="strict" if strict else "normal")
+            stroke.to_dab(read, 2 * n - 10, 2 * n)
+            stroke.to_dab(read, 2 * n + 5, 2 * n)  # a second dab: growth from the painted border
+            stroke.geometry()  # the outline at commit
     except Exception as e:  # noqa: BLE001 - only a head start; the first dab works without it
         log.warning("brush warm-up failed: %s", e)
 
@@ -607,18 +630,11 @@ def brush_warm_up() -> None:
 def stroke_class(sb, method):
     """The stroke of a smart mode: Border growth, or the regions of a segmentation model."""
     if method in (None, "border"):
-        start = time.perf_counter()
-        with timing.step("import"):
-            import borderbrush
-        if not getattr(stroke_class, "_border_loaded", False):
-            stroke_class._border_loaded = True
-            timing.once("import borderbrush (scipy, numba)", start)
-        with timing.step("settings"):
-            return functools.partial(borderbrush.BorderStroke, reach=border_setting("border_reach"),
+        import borderbrush
+        return functools.partial(borderbrush.BorderStroke, reach=border_setting("border_reach"),
                                  follow=border_setting("border_follow", True), sensitivity=state["sensitivity"],
                                  snap=border_setting("border_snap", True), smooth=border_setting("border_smooth", True))
-    with timing.step("import"):
-        import modelbrush
+    import modelbrush
     model = modelbrush.SEGMENTERS.get(method)
     if model is None:
         raise ViewerError("Unknown smart mode.")
@@ -642,33 +658,29 @@ def new_stroke(sb, data: dict, x: float, y: float, frontend_id: int):
     path = need_project().image_path(image)
     stroke = stroke_class(sb, data.get("method"))(image, data["mode"], sb.check_scale(data.get("scale")), x, y,
                                                    sb.check_inner(data.get("inner")))
-    with timing.step("open slide"):
-        stroke.slide = slides.open(str(path), frontend_id)  # the viewer has it open already
+    stroke.slide = slides.open(str(path), frontend_id)  # the viewer has it open already
+    stroke.bounds = stroke.slide.bounds()  # dabs stop at the edge of the image
     return stroke
 
 
 def commit_stroke(stroke, class_id) -> dict:
     """Ends a stroke: paints its area with the class (merged into touching shapes of that class) or erases it."""
-    with timing.measure("commit", stroke=str(getattr(stroke, "id", ""))[:8] or None, dabs=len(stroke.dabs)):
-        with timing.step("load annotations"):
-            store = annotations_of(stroke.image)
-        with stroke.lock, timing.step("outline"):
-            geometry = stroke.geometry()
-        if geometry is None:
-            return {"changed": 0, **store.summary()}
-        with timing.step("store"):
-            if stroke.mode == "erase":
-                changed = store.erase_area(geometry, hidden_classes())
-            else:
-                try:
-                    class_id = int(class_id)
-                except (TypeError, ValueError):
-                    raise ViewerError("Choose a class first.") from None
-                changed = int(store.add_area(geometry, class_id) is not None)
-                if changed:
-                    reveal(class_id)
-        with timing.step("summary"):
-            return {"changed": changed, **(changed_annotations(stroke.image, store) if changed else store.summary())}
+    store = annotations_of(stroke.image)
+    with stroke.lock:
+        geometry = stroke.geometry()
+    if geometry is None:
+        return {"changed": 0, **store.summary()}
+    if stroke.mode == "erase":
+        changed = store.erase_area(geometry, hidden_classes())
+    else:
+        try:
+            class_id = int(class_id)
+        except (TypeError, ValueError):
+            raise ViewerError("Choose a class first.") from None
+        changed = int(store.add_area(geometry, class_id) is not None)
+        if changed:
+            reveal(class_id)
+    return {"changed": changed, **(changed_annotations(stroke.image, store) if changed else store.summary())}
 
 
 @app.route("POST", "/smartbrush/dab")
@@ -678,25 +690,22 @@ def smart_dab(req):
     `scale` is screen pixels per level-0 pixel when the stroke started; `mode` is "paint" or "erase"; `method` the
     smart mode ("border" or a model's id). `segmenting`: some dabs wait for the model; the viewer asks again."""
     data = body(req)
-    with timing.measure("dab", stroke=str(data.get("stroke"))[:8], via="http") as info:
-        sb = smartbrush_module()
-        image = data.get("image")
-        key = (req.frontend_id, str(data.get("stroke")))
-        try:
-            x, y = float(data["x"]), float(data["y"])
-        except (KeyError, TypeError, ValueError):
-            raise ViewerError("Invalid point.") from None
-        with lock:
-            stroke = strokes.get(key)
-            if stroke is None:
-                info["first"] = True
-                stroke = strokes[key] = new_stroke(sb, data, x, y, req.frontend_id)
-        if stroke.image != image:
-            raise ViewerError("This stroke belongs to another image.", 409)
-        with stroke.lock:
-            dabs = stroke.to_dab(sb.slide_reader(stroke.slide), x, y)
-            info["dabs"] = len(dabs)
-            return {"dabs": dabs, "segmenting": stroke.waiting}
+    sb = smartbrush_module()
+    image = data.get("image")
+    key = (req.frontend_id, str(data.get("stroke")))
+    try:
+        x, y = float(data["x"]), float(data["y"])
+    except (KeyError, TypeError, ValueError):
+        raise ViewerError("Invalid point.") from None
+    with lock:
+        stroke = strokes.get(key)
+        if stroke is None:
+            stroke = strokes[key] = new_stroke(sb, data, x, y, req.frontend_id)
+    if stroke.image != image:
+        raise ViewerError("This stroke belongs to another image.", 409)
+    with stroke.lock:
+        dabs = stroke.to_dab(sb.slide_reader(stroke.slide), x, y)
+        return {"dabs": dabs, "segmenting": stroke.waiting}
 
 
 @app.route("POST", "/smartbrush/outline")
@@ -721,12 +730,12 @@ def smart_outline(req):
                                                            sb.check_inner(data.get("inner")))
             stroke.outline(points)
             stroke.slide = slides.open(str(path), req.frontend_id)
+            stroke.bounds = stroke.slide.bounds()
             strokes[key] = stroke
     if stroke.image != image:
         raise ViewerError("This stroke belongs to another image.", 409)
-    with stroke.lock, timing.measure("polygon dabs", stroke=str(data.get("stroke"))[:8]) as info:
+    with stroke.lock:
         dabs = stroke.outline_dabs(sb.slide_reader(stroke.slide))
-        info["dabs"], info["remaining"] = len(dabs), len(stroke.todo)
         return {"dabs": dabs, "remaining": len(stroke.todo), "segmenting": stroke.waiting}
 
 
@@ -1028,7 +1037,6 @@ async def smart_stream(msg):
                 return  # a late message of a stroke that has ended
             queue = stream_queues[key] = []
             threading.Thread(target=stream_worker, args=(key,), name=f"stroke-{key[1][:8]}", daemon=True).start()
-        data["_arrived"] = time.perf_counter()  # for the timing log: how long it waited in the queue
         queue.append(data)
         stream_lock.notify_all()
 
@@ -1058,30 +1066,22 @@ def stream_worker(key: tuple[int, str]) -> None:
                     continue
                 if kind == "cancel":
                     return
-                waited = (time.perf_counter() - data.get("_arrived", time.perf_counter())) * 1000
-                skipped = sum(1 for k in kinds[:i] if k == "point")  # older points dropped for this one
-                label = "dab" if kind in ("start", "point") else "end" if kind == "end" else str(kind)
-                with timing.measure(label, stroke=stroke_id[:8], via="stream", first=kind == "start",
-                                    queued=f"{waited:.0f} ms", skipped=skipped or None) as info:
-                    if kind == "start":
-                        sb = smartbrush_module()
-                        x, y = float(data["x"]), float(data["y"])
-                        with lock:
-                            stroke = new_stroke(sb, data, x, y, frontend_id)
-                    if stroke is None:
-                        continue
-                    if kind in ("start", "point"):
-                        with stroke.lock:
-                            dabs = stroke.to_dab(sb.slide_reader(stroke.slide), float(data["x"]), float(data["y"]))
-                        info["dabs"] = len(dabs)
-                        if dabs:
-                            with timing.step("send"):
-                                stream_send(frontend_id, stroke_id, {"type": "dabs", "dabs": dabs})
-                    elif kind == "end":
-                        reply = commit_stroke(stroke, data.get("class_id"))
-                        with timing.step("send"):
-                            stream_send(frontend_id, stroke_id, {"type": "done", **reply})
-                        return
+                if kind == "start":
+                    sb = smartbrush_module()
+                    x, y = float(data["x"]), float(data["y"])
+                    with lock:
+                        stroke = new_stroke(sb, data, x, y, frontend_id)
+                if stroke is None:
+                    continue
+                if kind in ("start", "point"):
+                    with stroke.lock:
+                        dabs = stroke.to_dab(sb.slide_reader(stroke.slide), float(data["x"]), float(data["y"]))
+                    if dabs:
+                        stream_send(frontend_id, stroke_id, {"type": "dabs", "dabs": dabs})
+                elif kind == "end":
+                    reply = commit_stroke(stroke, data.get("class_id"))
+                    stream_send(frontend_id, stroke_id, {"type": "done", **reply})
+                    return
     except ViewerError as e:
         stream_send(frontend_id, stroke_id, {"type": "error", "message": str(e)})
     except (KeyError, TypeError, ValueError):

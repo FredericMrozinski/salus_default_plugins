@@ -49,7 +49,6 @@ from scipy import ndimage
 from scipy.spatial import cKDTree
 
 import smartbrush as sb
-import timing
 
 try:
     import numba
@@ -736,15 +735,13 @@ class BorderStroke(sb.Stroke):
         # growth from there would step into the next region wherever its colours are allowed. Gaps are filled only between
         # grown pixels too: snapping makes holes smaller (a nucleus' hole shrinks to the nucleus), and filling would then
         # close them over what they hold. Snapped pixels only count as painted (they are not painted again).
-        with timing.step("canvas"):
-            painted = self.canvas.get(u0, v0, n)
-            grown = self.grown.get(u0, v0, n)
+        painted = self.canvas.get(u0, v0, n)
+        grown = self.grown.get(u0, v0, n)
         if self.polygon is not None and self.polygon.intersects(shapely.box(u0, v0, u0 + n, v0 + n)):
             polygon = _polygon_in_window(self.polygon, u0, v0, n)
             painted |= polygon
             grown |= polygon
-        with timing.step("grow"):
-            reached = grow(exact, grown, self.inner, keep_seeds, o, strict=self.strict) & ~painted
+        reached = grow(exact, grown, self.inner, keep_seeds, o, strict=self.strict) & ~painted
         if self.follow and keep_seeds is None and not (painted[o, o] or reached[o, o]):
             # Left behind (see the class docstring): grow from the brush's core as well, along the line from the previous
             # dab's centre (painted already), so the new part joins the painting instead of starting an island.
@@ -753,19 +750,20 @@ class BorderStroke(sb.Stroke):
                 du, dv = self.previous[0] - pu, self.previous[1] - pv
                 # Dabs of a drag are `spacing` apart; farther is a jump (e.g. a call that starts elsewhere): the centre only.
                 previous = (du, dv) if max(abs(du), abs(dv)) <= 2 * self.spacing else None
-            with timing.step("grow (follow)"):
-                reached |= grow(exact, grown | reached, self.inner, None, o, seed=core_disk(o, self.inner, previous),
-                                strict=self.strict) & ~painted
+            reached |= grow(exact, grown | reached, self.inner, None, o, seed=core_disk(o, self.inner, previous),
+                            strict=self.strict) & ~painted
         if keep_seeds is None:
             self.previous = (pu, pv)
+        inside = self.inside(u0, v0, n, n)  # beyond the image (read as white there): never painted
         mask = sb.fill_gaps(grown | reached) & ~painted
-        with timing.step("canvas"):
-            self.grown.add(u0, v0, mask)
+        if inside is not None:
+            mask &= inside
+        self.grown.add(u0, v0, mask)
         if self.snap:
             # measured from the grown pixels: snapping never builds on earlier snapping (it would creep on, dab by dab)
-            with timing.step("snap"):
-                mask |= snap_to_edges(fine, grown | mask, mask, window_maps(o, self.inner).outer) & ~painted
-        with timing.step("canvas"):
-            self.canvas.add(u0, v0, mask)
+            mask |= snap_to_edges(fine, grown | mask, mask, window_maps(o, self.inner).outer) & ~painted
+            if inside is not None:
+                mask &= inside
+        self.canvas.add(u0, v0, mask)
         self.dabs.append((u0, v0, mask))
         return sb.dab_reply(self, u0, v0, mask)

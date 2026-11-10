@@ -28,6 +28,18 @@ DOWNSAMPLES = (1, 2, 4, 8, 16, 32)  # the resolutions pixel maps can be exported
 DEFAULT_STATUSES = [("Empty", "#9e9e9e"), ("To review", "#f2c200"), ("Reviewed", "#3cb44b")]
 
 
+def _current_umask() -> int:
+    mask = os.umask(0)  # the umask can only be read by setting it: put it back at once
+    os.umask(mask)
+    return mask
+
+
+# The process' umask (Salus sets it, see its `umask` setting), read once at import, before any threads: setting it is
+# process-wide, and a file created by another thread in between would get the wrong mode.
+UMASK = _current_umask()
+FILE_MODE = 0o666 & ~UMASK  # what a file created the usual way gets: 664 with umask 002 (group-writable), 644 with 022
+
+
 def write_json_atomic(path: Path, data) -> None:
     """Writes JSON so that a crash never leaves a half-written file behind."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -35,11 +47,26 @@ def write_json_atomic(path: Path, data) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=1)
-        os.chmod(tmp, 0o644)  # mkstemp makes the file private; these files are as readable as any other
+        # mkstemp makes the file private (0600) whatever the umask, and the rename keeps that: give it the mode of a file
+        # created the usual way, so the umask decides (shared projects: group-writable with umask 002).
+        os.chmod(tmp, FILE_MODE)
         os.replace(tmp, path)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
+
+
+def normalize_pattern(value) -> str:
+    """A project's image filter as a regular expression (Python's `re`), searched in each file's path relative to the image
+    folder (e.g. `2022/22_10367/slide.tif`, with /). Refused if it does not compile."""
+    pattern = str(value or "").strip()
+    if not pattern:
+        raise ViewerError("Give a regular expression, e.g. \\.(svs|tif)$ or ^cohort_a/.*_HE\\.svs$.")
+    try:
+        re.compile(pattern)
+    except re.error as e:
+        raise ViewerError(f"That is not a valid regular expression: {e}.") from None
+    return pattern
 
 
 def normalize_extensions(value) -> list[str]:
@@ -100,7 +127,9 @@ class Project:
 
     # -- creating and opening
     @classmethod
-    def create(cls, name: str, root, extensions, save) -> Project:
+    def create(cls, name: str, root, extensions, save, pattern=None) -> Project:
+        """A new project. Its images are the files with one of `extensions`, or, with a `pattern` (a regular expression,
+        see normalize_pattern), the files whose relative path it matches; `extensions` is then not used."""
         name = str(name or "").strip()
         if not name:
             raise ViewerError("Give the project a name.")
@@ -114,9 +143,16 @@ class Project:
             raise ViewerError("The save folder is a file.")
         if save.resolve() == root.resolve():
             raise ViewerError("Choose a save folder other than the image folder, so that annotations and images stay apart.")
+        if pattern is not None:
+            pattern = normalize_pattern(pattern)
+            extensions = []
+        else:
+            extensions = normalize_extensions(extensions)
         save.mkdir(parents=True, exist_ok=True)
         data = {"format": FORMAT_VERSION, "id": uuid.uuid4().hex, "name": name, "root": str(root),
-                "extensions": normalize_extensions(extensions), "classes": [], "next_class_id": 1}
+                "extensions": extensions, "classes": [], "next_class_id": 1}
+        if pattern is not None:
+            data["pattern"] = pattern
         add_status_defaults(data)
         project = cls(save, data)
         project.write()
@@ -144,6 +180,29 @@ class Project:
                 data.setdefault("export", {}).setdefault("colors", {})[str(c["id"])] = c.pop("export_color")
         return cls(save, data)
 
+    def edit(self, name, root, extensions=None, pattern=None) -> None:
+        """Changes the project's name, image folder and which files are its images (file types, or a regular expression
+        with `pattern`; see create). The save folder, classes, statuses and annotations stay. Annotations belong to an
+        image's path below the image folder, so after moving the images keep that structure below the new folder."""
+        name = str(name or "").strip()
+        if not name:
+            raise ViewerError("Give the project a name.")
+        root = absolute_dir(root, "image folder")
+        if not root.is_dir():
+            raise ViewerError("The image folder does not exist on the server.")
+        if self.save.resolve() == root.resolve():
+            raise ViewerError("Choose an image folder other than the save folder, so that annotations and images stay apart.")
+        new_pattern = normalize_pattern(pattern) if pattern is not None else None
+        new_extensions = [] if new_pattern is not None else normalize_extensions(extensions)
+        with self.lock:
+            self.data.update(name=name, root=str(root), extensions=new_extensions)
+            if new_pattern is not None:
+                self.data["pattern"] = new_pattern
+            else:
+                self.data.pop("pattern", None)
+            self._images = None  # found again with the new folder and filter
+            self.write()
+
     def write(self) -> None:
         with self.lock:
             write_json_atomic(self.save / PROJECT_FILE, self.data)
@@ -159,7 +218,7 @@ class Project:
 
     def info(self) -> dict:
         return {"id": self.id, "name": self.data["name"], "root": self.data["root"], "save": str(self.save),
-                "extensions": self.data["extensions"], "classes": self.data["classes"],
+                "extensions": self.data["extensions"], "pattern": self.data.get("pattern"), "classes": self.data["classes"],
                 "statuses": self.data["statuses"], "root_missing": not self.root.is_dir()}
 
     # -- images
@@ -208,6 +267,8 @@ class Project:
             if self._images is None or rescan:
                 found = []
                 extensions = tuple(self.data["extensions"])
+                # A regular expression instead of file types: searched in the path relative to the root (see create).
+                pattern = re.compile(self.data["pattern"]) if self.data.get("pattern") else None
                 seen = set()
                 for directory, subdirs, files in os.walk(self.root, onerror=lambda e: None, followlinks=True):
                     real = os.path.realpath(directory)
@@ -218,8 +279,11 @@ class Project:
                     subdirs[:] = sorted(d for d in subdirs if not d.startswith("."))
                     rel_dir = Path(directory).relative_to(self.root)
                     for name in files:
-                        if not name.startswith(".") and name.lower().endswith(extensions):
-                            found.append((rel_dir / name).as_posix())
+                        if name.startswith("."):
+                            continue
+                        rel = (rel_dir / name).as_posix()
+                        if pattern.search(rel) if pattern is not None else name.lower().endswith(extensions):
+                            found.append(rel)
                 self._images = sorted(found, key=str.lower)
             return list(self._images)
 

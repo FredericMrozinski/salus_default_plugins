@@ -11,7 +11,7 @@ import uuid
 from pathlib import Path
 
 from shapely import make_valid
-from shapely.geometry import LineString, MultiPolygon, Point, Polygon, mapping, shape
+from shapely.geometry import LineString, MultiPolygon, Point, Polygon, box, mapping, shape
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
@@ -92,9 +92,12 @@ class Shape:
 
 
 class Annotations:
-    def __init__(self, project: Project, image: str):
+    def __init__(self, project: Project, image: str, bounds: tuple[float, float, float, float] | None = None):
+        """`bounds` (x, y, width, height in level-0 pixels): the image as the viewer shows it. New shapes are cut to it,
+        so no annotation reaches beyond the image; None: not cut (the image could not be read)."""
         self.project = project
         self.image = image
+        self.bounds = box(bounds[0], bounds[1], bounds[0] + bounds[2], bounds[1] + bounds[3]) if bounds else None
         self.file: Path = project.annotation_file(image)
         self.lock = threading.RLock()
         self.shapes: list[Shape] = []
@@ -148,6 +151,12 @@ class Annotations:
         del self.undo_stack[:-UNDO_LIMIT]
         self.redo_stack.clear()
 
+    def clip(self, geometry: BaseGeometry | None) -> BaseGeometry | None:
+        """The part of a shape inside the image (see __init__); None if nothing is left."""
+        if geometry is None or self.bounds is None or self.bounds.contains(geometry):
+            return geometry
+        return polygonal(make_valid(geometry.intersection(self.bounds)))
+
     def add_polygon(self, points, class_id: int, simplify: float = 0.0) -> str | None:
         """Adds a polygon (a closed ring of image pixels). Self-intersections are repaired. Returns the new id."""
         self.project.cls(class_id)
@@ -157,6 +166,7 @@ class Annotations:
         geometry = polygonal(make_valid(Polygon(points)))
         if geometry is not None and simplify > 0:
             geometry = polygonal(geometry.simplify(simplify, preserve_topology=True))
+        geometry = self.clip(geometry)
         if geometry is None or geometry.area < 1e-6:
             return None
         with self.lock:
@@ -170,7 +180,7 @@ class Annotations:
         """Adds an area painted with a brush. Shapes of the same class it overlaps or touches are merged into it
         (the merged shape keeps the id of the first of them). Returns the id of the resulting shape."""
         self.project.cls(class_id)
-        geometry = polygonal(make_valid(geometry))
+        geometry = self.clip(polygonal(make_valid(geometry)))
         if geometry is None or geometry.area < 1e-6:
             return None
         with self.lock:
@@ -258,12 +268,14 @@ class Annotations:
 
     def import_shapes(self, shapes: list[tuple], replace: bool) -> int:
         """Adds shapes (class id, geometry[, name]) read from another file, or replaces all shapes with them. One undo step."""
+        clipped = [(s[0], self.clip(s[1]), s[2] if len(s) > 2 else None) for s in shapes]
+        clipped = [s for s in clipped if s[1] is not None and s[1].area >= 1e-6]  # wholly outside the image: left out
         with self.lock:
             self._checkpoint()
             kept = [] if replace else list(self.shapes)
-            self.shapes = kept + [Shape(str(uuid.uuid4()), s[0], s[1], s[2] if len(s) > 2 else None) for s in shapes]
+            self.shapes = kept + [Shape(str(uuid.uuid4()), class_id, geometry, name) for class_id, geometry, name in clipped]
             self.save()
-            return len(shapes)
+            return len(clipped)
 
     def undo(self) -> bool:
         with self.lock:

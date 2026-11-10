@@ -898,7 +898,7 @@ class Plugin:
                 sys.exit(1)
             socket_path = sys.argv[1]
 
-        logger.info(f"Passed socket-path: {socket_path}")
+        logger.debug(f"Passed socket-path: {socket_path}")
         self._socket_path = socket_path
         self._connection: Connection | None = None
         self._loop: asyncio.AbstractEventLoop | None = None

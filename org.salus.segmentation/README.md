@@ -4,7 +4,7 @@ Polygon annotation of whole slide images in **annotation projects**, with export
 
 | Component | Panel | What it does |
 |---|---|---|
-| `browser` (entry) | left | Chooses the project (the picker at the top; **+** creates one, the folder button opens one) and lists its images with their folder and status, filtered by name and status. Clicking an image opens it. Opens the viewer, tools and classes; **Export**, **Statuses** and, under **⋯**, **Project information** (folders and file types) and **Import from QuPath** are here too. |
+| `browser` (entry) | left | Chooses the project (the picker at the top; **+** creates one, the folder button opens one) and lists its images with their folder and status, filtered by name and status, and sorted with the sort button next to ↻ (by name, the image file's date or the last annotation edit, ascending or descending; kept per browser). Clicking an image opens it. Opens the viewer, tools and classes; **Export**, **Statuses** and, under **⋯**, **Project information** (folders and file types), **Edit project** (name, image folder, and file types or regular expression; the save folder stays) and **Import from QuPath** are here too. |
 | `viewer` | center | The image (OpenSlide or Pillow tiles in OpenSeadragon) with the annotations drawn on top. |
 | `tools` | bottom | In sections from left to right: the mode (Exact or Smart, stacked); Pan, Brush, Eraser, Polygon (2 × 2); the tool width (and Smart's colours); undo / redo. |
 | `classes` | right | The project's classes, with their numbers of shapes in the open image and a hide button. Click one to draw with it. **Hide annotations** at the bottom hides all shapes while held down. |
@@ -12,13 +12,13 @@ Polygon annotation of whole slide images in **annotation projects**, with export
 
 ## Projects
 
-A project has a name, an **image folder** (searched recursively for the chosen file types, e.g. `.svs, .tif`) and a **save folder**.
+A project has a name, an **image folder** (searched recursively for the chosen file types, e.g. `.svs, .tif`, or, with the toggle in the New project dialog set to *Regular expression*, for files whose path below the image folder matches it, e.g. `^cohort_a/.*_HE\.svs$`; searched anywhere in the path, case-sensitive unless it starts with `(?i)`) and a **save folder**.
 Whole slide images are read by OpenSlide; anything it cannot read, such as `.jpg`, `.png`, `.bmp` or untiled TIFF, by
 Pillow (decoded into memory once when opened, up to 1 gigapixel), so plain pictures can be annotated, segmented and
 exported the same way. The images are only read. Everything the plugin writes goes into the save folder:
 
 ```
-<save folder>/project.json                          name, image folder, file types, classes, statuses
+<save folder>/project.json                          name, image folder, file types or regular expression, classes, statuses
 <save folder>/annotations/<image path>.geojson      one file per annotated image (<image path> relative to the image folder)
 ```
 
@@ -265,7 +265,7 @@ takes 0.3 s on MPS (the first one about 2 s), 2.2 s on the CPU, and about 2.5 GB
 
 A `FeatureCollection` per image. Coordinates are **pixels of the full-resolution image** (x to the right, y down, (0,0) the top left
 of level 0), the convention of QuPath's GeoJSON, so the files can be dropped onto the image in QuPath and read by scripts. Slides whose
-scanned area does not start at (0,0) (OpenSlide bounds, e.g. MRXS) are shown cropped, but annotations still use level-0 coordinates. Every feature is a `Polygon` or `MultiPolygon` (with holes where erased) with
+scanned area does not start at (0,0) (OpenSlide bounds, e.g. MRXS) are shown cropped, but annotations still use level-0 coordinates. Annotations never reach beyond the image shown (its scanned area, or the whole image): every new shape, brush stroke and import is cut to it, and the viewer draws shapes and painting only inside it. Shapes saved before this rule are left as they are. Every feature is a `Polygon` or `MultiPolygon` (with holes where erased) with
 
 ```json
 "properties": {"objectType": "annotation", "class_id": 1, "name": "Region A", "classification": {"name": "Tumor", "color": [255, 0, 0]}}

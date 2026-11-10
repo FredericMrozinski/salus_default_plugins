@@ -2,6 +2,7 @@ import json
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -146,6 +147,44 @@ class ProjectTest(Base):
         reg.forget(self.project.id)
         self.assertEqual(reg.load(), [])
 
+    def test_images_by_regular_expression(self):
+        p = Project.create("R", self.dir / "images", None, self.dir / "save-r", pattern=r"^sub/.*\.(SVS|tif)$")
+        self.assertEqual(p.images(), ["sub/b.SVS", "sub/c.tif"])
+        self.assertEqual(p.info()["pattern"], r"^sub/.*\.(SVS|tif)$")
+        self.assertEqual(Project.open(self.dir / "save-r").images(), ["sub/b.SVS", "sub/c.tif"])  # kept in project.json
+        p = Project.create("R2", self.dir / "images", None, self.dir / "save-r2", pattern=r"(?i)\.svs$")
+        self.assertEqual(p.images(), ["a.svs", "sub/b.SVS"])  # hidden files stay out
+        for bad in ("", "  ", "(unclosed"):
+            with self.assertRaises(ViewerError):
+                Project.create("X", self.dir / "images", None, self.dir / "save-x", pattern=bad)
+        self.assertIsNone(self.project.info()["pattern"])  # file types as before
+
+    def test_edit_project(self):
+        p = self.project
+        self.assertEqual(p.images(), ["a.svs", "sub/b.SVS"])
+        p.edit(" Q ", self.dir / "images", pattern=r"\.tif$")
+        self.assertEqual((p.data["name"], p.images(), p.info()["pattern"], p.info()["extensions"]), ("Q", ["sub/c.tif"], r"\.tif$", []))
+        p.edit("Q", self.dir / "images", ".svs, .tif")  # back to file types: the pattern goes
+        self.assertEqual(p.images(), ["a.svs", "sub/b.SVS", "sub/c.tif"])
+        self.assertIsNone(p.info()["pattern"])
+        reopened = Project.open(self.dir / "save")
+        self.assertEqual((reopened.data["name"], reopened.images()), ("Q", ["a.svs", "sub/b.SVS", "sub/c.tif"]))
+        self.assertEqual(reopened.data["classes"][0]["name"], "Tumor")  # classes stay
+        for bad in (dict(name="", root=self.dir / "images", extensions=".svs"),
+                    dict(name="Q", root=self.dir / "nowhere", extensions=".svs"),
+                    dict(name="Q", root=self.dir / "save", extensions=".svs"),
+                    dict(name="Q", root=self.dir / "images", pattern="(")):
+            with self.assertRaises(ViewerError):
+                p.edit(**bad)
+        self.assertEqual(Project.open(self.dir / "save").data["extensions"], [".svs", ".tif"])  # a refused edit changes nothing
+
+    def test_saved_files_follow_the_umask(self):
+        import project as project_module
+        for mode in (0o664, 0o644):  # umask 002 (shared projects) and 022
+            with mock.patch.object(project_module, "FILE_MODE", mode):
+                project_module.write_json_atomic(self.dir / "mode.json", {"a": 1})
+            self.assertEqual((self.dir / "mode.json").stat().st_mode & 0o777, mode)
+
     def test_registry_moves_to_a_new_folder(self):
         old = Registry(self.dir / "old" / "reg.json")
         old.remember(self.project)
@@ -163,6 +202,21 @@ class ProjectTest(Base):
 class AnnotationTest(Base):
     def store(self):
         return Annotations(self.project, "a.svs")
+
+    def test_shapes_are_cut_to_the_image(self):
+        from shapely.geometry import box
+        store = Annotations(self.project, "a.svs", (10, 20, 50, 50))  # the image: x 10..60, y 20..70
+        store.add_polygon(SQUARE, self.cls["id"])
+        self.assertEqual(store.shapes[0].geometry.bounds, (10, 20, 60, 70))
+        store.add_area(box(55, 65, 200, 200), self.cls["id"])  # merged, and cut
+        self.assertEqual(store.shapes[0].geometry.bounds, (10, 20, 60, 70))
+        self.assertIsNone(store.add_polygon([[100, 100], [150, 100], [150, 150]], self.cls["id"]))  # wholly outside
+        self.assertEqual(store.import_shapes([(self.cls["id"], box(0, 0, 30, 30)), (self.cls["id"], box(500, 500, 600, 600))],
+                                             replace=True), 1)
+        self.assertEqual(store.shapes[0].geometry.bounds, (10, 20, 30, 30))
+        whole = Annotations(self.project, "sub/b.SVS")  # no bounds known: nothing is cut
+        whole.add_polygon(SQUARE, self.cls["id"])
+        self.assertEqual(whole.shapes[0].geometry.bounds, (0, 0, 100, 100))
 
     def test_polygon_is_saved_as_geojson_in_pixels(self):
         store = self.store()

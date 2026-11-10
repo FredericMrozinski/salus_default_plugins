@@ -198,6 +198,31 @@ class BorderGrowthTest(unittest.TestCase):
         self.assertLess((time.perf_counter() - t) / 5, 0.5)
 
 
+
+class BoundsTest(unittest.TestCase):
+    def test_strokes_stop_at_the_edge_of_the_image(self):
+        import numpy as np
+        import borderbrush as bb
+        import smartbrush as sb
+        n = 2 * (sb.OUTER + sb.MARGIN) + 1
+        picture = np.full((3 * n, 3 * n, 3), 200, np.uint8)  # one even colour: the dab grows over its whole window
+
+        def box(stroke, u0, v0, width, height=None):
+            height = width if height is None else height
+            return picture[v0 + n:v0 + n + height, u0 + n:u0 + n + width]
+
+        def read(stroke, u, v):
+            return box(stroke, u - sb.OUTER - sb.MARGIN, v - sb.OUTER - sb.MARGIN, n)
+
+        read.box = box
+        stroke = bb.BorderStroke("img", "paint", 1.0, 100.0, 100.0, 16, snap=False)
+        stroke.bounds = (0.0, 0.0, 120.0, 1000.0)  # the image ends 20 px right of the brush
+        stroke.to_dab(read, 100.0, 100.0)
+        geometry = stroke.geometry()
+        self.assertIsNotNone(geometry)
+        self.assertLessEqual(geometry.bounds[2], 120.5)
+        self.assertGreater(geometry.bounds[3] - geometry.bounds[1], 100)  # it did grow, just not past the edge
+
 if __name__ == "__main__":
     unittest.main()
 

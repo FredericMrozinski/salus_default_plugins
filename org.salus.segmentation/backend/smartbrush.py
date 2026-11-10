@@ -27,7 +27,6 @@ import torch.nn.functional as F
 from PIL import Image
 from shapely.geometry.base import BaseGeometry
 
-import timing
 from errors import ViewerError
 from slides import OVERVIEW_REDUCTION
 
@@ -121,11 +120,6 @@ _fine_kernels: dict[float, torch.Tensor] = {}
 def blur_exact_and_fine(rgb: np.ndarray, fine_sigma: float) -> tuple[np.ndarray, np.ndarray]:
     """`blur_exact` of the region and the same region blurred only by `fine_sigma` (packed the same way, without the
     margin), in one pass on DEVICE. The coarse colours are exactly those of `blur_exact`."""
-    with timing.step("blur"):
-        return _blur_exact_and_fine(rgb, fine_sigma)
-
-
-def _blur_exact_and_fine(rgb: np.ndarray, fine_sigma: float) -> tuple[np.ndarray, np.ndarray]:
     x = torch.from_numpy(np.array(rgb)).to(DEVICE).permute(2, 0, 1)[:, None].float()  # (3, 1, H, W)
     k = _gaussian()
     coarse = F.conv2d(F.conv2d(x, k.view(1, 1, 1, -1)), k.view(1, 1, -1, 1))[:, 0].round_().clamp_(0, 255).to(torch.int32)
@@ -145,9 +139,8 @@ def _blur_exact_and_fine(rgb: np.ndarray, fine_sigma: float) -> tuple[np.ndarray
 
 def blur_exact(rgb: np.ndarray) -> np.ndarray:
     """Blurs an HxWx3 uint8 region and returns its packed exact colours (0xRRGGBB, int32), without the margin."""
-    with timing.step("blur"):
-        q = _blurred(rgb)
-        return ((q[0] << 16) | (q[1] << 8) | q[2]).cpu().numpy()
+    q = _blurred(rgb)
+    return ((q[0] << 16) | (q[1] << 8) | q[2]).cpu().numpy()
 
 
 def _gaps_along_rows(m: torch.Tensor, gap: int) -> torch.Tensor:
@@ -168,11 +161,10 @@ def fill_gaps(mask: np.ndarray, gap: int = GAP, all4: bool = ALL4) -> np.ndarray
     """
     if gap <= 0 or not mask.any():
         return mask
-    with timing.step("fill gaps"):
-        m = torch.from_numpy(mask).to(DEVICE)
-        h = _gaps_along_rows(m, gap)
-        v = _gaps_along_rows(m.T.contiguous(), gap).T
-        return (m | ((h & v) if all4 else (h | v))).cpu().numpy()
+    m = torch.from_numpy(mask).to(DEVICE)
+    h = _gaps_along_rows(m, gap)
+    v = _gaps_along_rows(m.T.contiguous(), gap).T
+    return (m | ((h & v) if all4 else (h | v))).cpu().numpy()
 
 
 # --------------------------------------------------------------------------- masks to polygons
@@ -234,12 +226,11 @@ def dab_reply(stroke, u0: int, v0: int, mask: np.ndarray) -> dict | None:
 
 def png_of(mask: np.ndarray) -> str:
     """The mask as a white PNG with the mask as alpha, base64 (the viewer tints it)."""
-    with timing.step("png"):
-        rgba = np.zeros(mask.shape + (4,), np.uint8)
-        rgba[mask] = 255
-        out = io.BytesIO()
-        Image.fromarray(rgba, "RGBA").save(out, "PNG", compress_level=1)
-        return base64.b64encode(out.getvalue()).decode()
+    rgba = np.zeros(mask.shape + (4,), np.uint8)
+    rgba[mask] = 255
+    out = io.BytesIO()
+    Image.fromarray(rgba, "RGBA").save(out, "PNG", compress_level=1)
+    return base64.b64encode(out.getvalue()).decode()
 
 
 # --------------------------------------------------------------------------- strokes
@@ -259,7 +250,22 @@ class Stroke:
         self.polygon: BaseGeometry | None = None  # smart polygon: the drawn polygon, in grid coordinates
         self.todo: deque[tuple[int, int]] = deque()  # smart polygon: dab centres not done yet
         self.waiting = False  # the last call stopped at a dab that is not ready yet (see Pending)
+        self.bounds: tuple[float, float, float, float] | None = None  # the image shown (level 0, see slides.bounds_of)
         self.lock = threading.Lock()
+
+    def inside(self, u0: int, v0: int, height: int, width: int) -> np.ndarray | None:
+        """Which grid pixels of the window from (u0, v0) have their centre on the image (`bounds`); None if all do (or
+        the bounds are not known). Dabs are cut to it, so that a stroke never paints beyond the image."""
+        if self.bounds is None:
+            return None
+        bx, by, bw, bh = self.bounds
+        s = self.scale
+        cx = self.x0 + (u0 + np.arange(width) + 0.5) / s
+        cy = self.y0 + (v0 + np.arange(height) + 0.5) / s
+        cols, rows = (cx >= bx) & (cx < bx + bw), (cy >= by) & (cy < by + bh)
+        if cols.all() and rows.all():
+            return None
+        return rows[:, None] & cols[None, :]
 
     def grid(self, x: float, y: float) -> tuple[int, int]:
         return int(math.floor((x - self.x0) * self.scale)), int(math.floor((y - self.y0) * self.scale))
@@ -387,11 +393,6 @@ def _from_overview(overview, x: float, y: float, span: float, size: int, span_y:
 def read_view(slide, x: float, y: float, scale: float, size: int, height: int | None = None) -> np.ndarray:
     """The slide as seen at `scale` (screen pixels per level-0 pixel): `size` x `height` RGB pixels (a square by default)
     whose top-left is the level-0 point (x, y)."""
-    with timing.step("read slide"):
-        return _read_view(slide, x, y, scale, size, height)
-
-
-def _read_view(slide, x: float, y: float, scale: float, size: int, height: int | None = None) -> np.ndarray:
     height = size if height is None else height
     os_slide = slide.slide
     down = 1 / scale  # level-0 pixels per screen pixel

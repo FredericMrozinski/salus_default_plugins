@@ -102,3 +102,11 @@ ul.status-changes { list-style: none; margin: 6px 0; padding: 0; display: flex; 
 ul.status-changes li { display: flex; align-items: center; gap: 6px; }
 ul.files { margin: 6px 0; padding-left: 18px; max-height: 140px; overflow: auto; font-size: 12px; }
 details summary { cursor: pointer; }
+.filter-toggle { display: flex; gap: 0; align-self: flex-start; }
+.filter-toggle button { font-size: 12px; padding: 3px 12px; border-radius: 0; }
+.filter-toggle button:first-child { border-radius: 4px 0 0 4px; }
+.filter-toggle button:last-child { border-radius: 0 4px 4px 0; }
+.filter-toggle button.on, .filter-toggle button.on:hover:not(:disabled) { --salus-button-fill: var(--salus-accent, #3a6df0); color: var(--salus-accent-fg, #fff); }
+.menu.sort { left: auto; right: 0; width: min(260px, calc(100vw - 16px)); min-width: 0; }
+.menu.sort .title, .menu.sort .sub { white-space: normal; overflow-wrap: anywhere; }
+.menu .menu-head { padding: 6px 8px 2px; font-size: 11px; color: var(--salus-fg-muted, #a9adba); text-transform: uppercase; letter-spacing: .04em; }

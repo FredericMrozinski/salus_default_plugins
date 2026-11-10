@@ -12,6 +12,7 @@ import pyvips  # noqa: E402
 from shapely.geometry import Polygon  # noqa: E402
 
 import export  # noqa: E402
+from project import UMASK  # noqa: E402
 from annotations import Annotations, Shape  # noqa: E402
 from errors import ViewerError  # noqa: E402
 from project import Project  # noqa: E402
@@ -101,7 +102,7 @@ class ExportJobTest(unittest.TestCase):
         self.assertEqual([c["name"] for c in legend["classes"]], ["Tumor", "Stroma"])
         self.assertEqual(legend["classes"][0]["rgb"], [255, 0, 0])
         self.assertEqual(legend["background"]["color"], "#000000")
-        self.assertEqual(oct((self.dir / "out/classes.json").stat().st_mode & 0o777), "0o644")
+        self.assertEqual((self.dir / "out/classes.json").stat().st_mode & 0o777, 0o666 & ~UMASK)
         self.assertFalse(list((self.dir / "out").rglob("*.part")))
 
     def test_every_pyramid_level_holds_only_class_colors(self):

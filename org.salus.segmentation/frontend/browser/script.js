@@ -9,7 +9,36 @@ const app = document.getElementById("app");
 let images = []; // [{path, shapes}]
 let filter = "";
 const statusFilter = new Set(); // ids of the statuses shown; empty shows all
-let menu = null; // the open menu: "projects" | "more" | "context" (right-click on images)
+let menu = null; // the open menu: "projects" | "more" | "sort" | "context" (right-click on images)
+
+// How the image list is sorted: by "name" (file name, then folder), "modified" (the image file's date) or "edited" (when
+// its annotations last changed; images without any come last either way), ascending or descending. Kept per browser.
+const SORTS = [
+  { id: "name", name: "Name", about: "The file name, then the folder" },
+  { id: "modified", name: "Image date", about: "When the image file last changed" },
+  { id: "edited", name: "Last annotation edit", about: "When the image's annotations last changed; images without any come last" },
+];
+let sort = { by: "name", descending: false };
+try {
+  const saved = JSON.parse(localStorage.getItem("segmentation.sort") ?? "null");
+  if (SORTS.some((s) => s.id === saved?.by)) sort = { by: saved.by, descending: !!saved.descending };
+} catch { /* no storage: the default */ }
+function setSort(change) {
+  sort = { ...sort, ...change };
+  try { localStorage.setItem("segmentation.sort", JSON.stringify(sort)); } catch { /* not kept */ }
+  render(shared.get());
+}
+const byName = (a, b) => fileName(a.path).localeCompare(fileName(b.path), undefined, { numeric: true, sensitivity: "base" })
+  || a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: "base" });
+function sorted(list) {
+  const sign = sort.descending ? -1 : 1;
+  if (sort.by === "name") return [...list].sort((a, b) => sign * byName(a, b));
+  const key = sort.by;
+  return [...list].sort((a, b) => {
+    if (a[key] == null || b[key] == null) return (a[key] == null) - (b[key] == null) || byName(a, b); // missing: last
+    return sign * (a[key] - b[key]) || byName(a, b);
+  });
+}
 // Images chosen with Ctrl/Cmd+click, Shift+click or Ctrl/Cmd+A. With two or more, the status buttons move to the bottom and
 // apply to all of them. `anchor` is where a Shift+click range starts.
 const selected = new Set();
@@ -31,7 +60,7 @@ onEvent((event) => {
     render(shared.get());
   } else if (event.type === "annotations") {
     const image = images.find((i) => i.path === event.image);
-    if (image) (image.shapes = event.shapes), render(shared.get());
+    if (image) (image.shapes = event.shapes), (image.edited = Date.now() / 1000), render(shared.get());
   } else if (event.type === "images") {
     loadImages(false).then(() => render(shared.get())); // images removed from or put back into the project
   }
@@ -130,10 +159,21 @@ function render(state) {
   const moreMenu = menu === "more" && h("div", { class: "menu more", role: "menu", onkeydown: menuKeys },
     h("button", { class: "item", role: "menuitem", title: "Where the project's images and annotations are", onclick: () => (closeMenu(), infoDialog(project)) },
       h("span", { class: "label" }, h("span", { class: "title" }, "Project information…"))),
+    h("button", { class: "item", role: "menuitem", title: "Change the project's name, image folder and which files are its images", onclick: () => (closeMenu(), editProjectDialog(project)) },
+      h("span", { class: "label" }, h("span", { class: "title" }, "Edit project…"))),
     h("button", { class: "item", role: "menuitem", title: "Import annotations exported from QuPath (GeoJSON)", onclick: () => (closeMenu(), importDialog(state)) },
       h("span", { class: "label" }, h("span", { class: "title" }, "Import from QuPath…"))),
     h("button", { class: "item", role: "menuitem", title: "Put images removed from the project back", onclick: () => (closeMenu(), removedDialog()) },
       h("span", { class: "label" }, h("span", { class: "title" }, "Removed images…"))));
+  // Sorting the list: by what, and in which order. It stays open, so both can be chosen in one go.
+  const sortItem = (on, title, sub, onclick) => h("button", { class: "item" + (on ? " on" : ""), role: "menuitemradio", "aria-checked": on ? "true" : "false", onclick },
+    h("span", { class: "check" }, on ? "✓" : ""), h("span", { class: "label" }, h("span", { class: "title" }, title), sub && h("span", { class: "sub" }, sub)));
+  const sortMenu = menu === "sort" && h("div", { class: "menu sort", role: "menu", "aria-label": "Sort images", onkeydown: menuKeys },
+    h("div", { class: "menu-head" }, "Sort by"),
+    SORTS.map((s) => sortItem(sort.by === s.id, s.name, s.about, () => setSort({ by: s.id }))),
+    h("div", { class: "menu-head" }, "Order"),
+    sortItem(!sort.descending, "Ascending", sort.by === "name" ? "A to Z" : "Oldest first", () => setSort({ descending: false })),
+    sortItem(sort.descending, "Descending", sort.by === "name" ? "Z to A" : "Newest first", () => setSort({ descending: true })));
   // The right-click menu of the images in the list (the selection, or the image clicked).
   const contextMenu = menu === "context" && h("div", { class: "menu context", role: "menu", onkeydown: menuKeys, style: `left:${context.x}px;top:${context.y}px` },
     h("button", { class: "item", role: "menuitem", onclick: () => (closeMenu(), removeDialog(context.paths)) },
@@ -170,7 +210,7 @@ function render(state) {
 
   for (const id of statusFilter) if (!project.statuses.some((s) => s.id === id)) statusFilter.delete(id); // removed statuses
   const needle = filter.trim().toLowerCase();
-  const shown = images.filter((i) => (!needle || i.path.toLowerCase().includes(needle)) && (!statusFilter.size || statusFilter.has(statusOf(project, i).id)));
+  const shown = sorted(images.filter((i) => (!needle || i.path.toLowerCase().includes(needle)) && (!statusFilter.size || statusFilter.has(statusOf(project, i).id))));
   const search = h("input", { type: "search", placeholder: "Filter images…", value: filter, oninput: (e) => { filter = e.target.value; render(shared.get()); } });
   // Only images in the list can be selected: those the filters hide leave the selection.
   const visible = new Set(shown.map((i) => i.path));
@@ -194,7 +234,7 @@ function render(state) {
           current && !multi && h("div", { class: "statuses" }, statusButtons(project, [image]))),
         h("span", { class: "dot", style: `background:${status.color}`, title: `${status.name} · ${image.shapes} shape${image.shapes === 1 ? "" : "s"}` }));
     }),
-    !shown.length && h("div", { class: "empty" }, images.length ? "No image matches." : `No ${project.extensions.join(" / ")} files in the image folder.`),
+    !shown.length && h("div", { class: "empty" }, images.length ? "No image matches." : project.pattern ? "No file in the image folder matches the project's regular expression." : `No ${project.extensions.join(" / ")} files in the image folder.`),
     error && h("div", { class: "empty error" }, error));
   const tally = project.statuses.map((s) => ({ ...s, count: images.filter((i) => statusOf(project, i).id === s.id).length }));
   const counts = tally.map((s) => `${s.count} ${s.name.toLowerCase()}`);
@@ -215,7 +255,11 @@ function render(state) {
   const scroll = app.querySelector(".list")?.scrollTop ?? 0;
   app.replaceChildren(head,
     h("div", { class: "search" },
-      h("div", { class: "line" }, search, h("button", { title: "Look for new or removed images", onclick: async () => { await loadImages(true); render(shared.get()); } }, "↻")),
+      h("div", { class: "line" }, search, h("button", { title: "Look for new or removed images", onclick: async () => { await loadImages(true); render(shared.get()); } }, "↻"),
+        h("div", { class: "anchor" },
+          h("button", { class: "icon-button" + (menu === "sort" ? " open" : ""), title: `Sort: ${SORTS.find((s) => s.id === sort.by).name}, ${sort.descending ? "descending" : "ascending"}`,
+            "aria-haspopup": "menu", "aria-expanded": menu === "sort" ? "true" : "false", onclick: () => toggleMenu("sort") }, icon("sort")),
+          sortMenu)),
       chips),
     list,
     // app.replaceChildren, unlike h(), would show `false` as text
@@ -288,14 +332,17 @@ const ICONS = {
   folder: "M184.62-200q-27.62 0-46.12-18.5Q120-237 120-264.62v-430.76q0-27.62 18.5-46.12Q157-760 184.62-760h199.23l80 80h311.53q27.62 0 46.12 18.5Q840-643 840-615.38v350.76q0 27.62-18.5 46.12Q803-200 775.38-200H184.62Zm0-40h590.76q10.77 0 17.7-6.92 6.92-6.93 6.92-17.7v-350.76q0-10.77-6.92-17.7-6.93-6.92-17.7-6.92H447.77l-80-80H184.62q-10.77 0-17.7 6.92-6.92 6.93-6.92 17.7v430.76q0 10.77 6.92 17.7 6.93 6.92 17.7 6.92ZM160-240v-480 480Z",
   more: "M190-480a50 50 0 1 0 100 0a50 50 0 1 0-100 0Zm240 0a50 50 0 1 0 100 0a50 50 0 1 0-100 0Zm240 0a50 50 0 1 0 100 0a50 50 0 1 0-100 0Z",
   expand: "M480-371.69 267.69-584l28.31-28.31 184 184 184-184L692.31-584 480-371.69Z",
+  // sort_by_alpha (24 units, see icon())
+  sort: ["0 0 24 24", "M2.62,16.58L6.33,7.42H7.36l3.67,9.15H9.91L9.02,14.22H4.63L3.68,16.58H2.62Zm2.35-3.25H8.64L6.86,8.73H6.75l-1.79,4.6Zm9.16,3.25V15.64l5.2-7.3h-5V7.42h6.2V8.36l-5.19,7.3h5.24v0.92H14.12ZM9.46,4.81L12,2.27l2.54,2.54H9.46ZM12,21.73L9.46,19.19h5.08L12,21.73Z"],
 };
 function icon(name) {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("viewBox", "0 -960 960 960");
+  const [box, d] = Array.isArray(ICONS[name]) ? ICONS[name] : ["0 -960 960 960", ICONS[name]]; // [viewBox, path] or a 960-unit path
+  svg.setAttribute("viewBox", box);
   svg.setAttribute("fill", "currentColor");
   svg.setAttribute("aria-hidden", "true");
   const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  path.setAttribute("d", ICONS[name]);
+  path.setAttribute("d", d);
   svg.append(path);
   return svg;
 }
@@ -379,17 +426,42 @@ function folderField(label, input, hint) {
     } }, "Browse…")), hint && h("span", {}, hint));
 }
 
+// Which files are a project's images: files of the given types, or files whose path matches a regular expression. The
+// field with its toggle, starting from `project` (its types or pattern) or the defaults; `value()` is what the backend takes.
+function imageFilter(project) {
+  const extensions = h("input", { type: "text", class: "mono", value: project?.extensions?.length ? project.extensions.join(", ") : ".svs", spellcheck: false });
+  const pattern = h("input", { type: "text", class: "mono", value: project?.pattern ?? "", placeholder: "e.g. ^cohort_a/.*_HE\\.svs$", spellcheck: false });
+  let byPattern = !!project?.pattern;
+  const field = h("label", { class: "field" });
+  const toggle = h("div", { class: "filter-toggle", role: "radiogroup", "aria-label": "Choose images by" });
+  const show = () => {
+    toggle.replaceChildren(...[["types", "File types"], ["pattern", "Regular expression"]].map(([id, label]) => {
+      const on = (id === "pattern") === byPattern;
+      return h("button", { type: "button", class: on ? "on" : "", role: "radio", "aria-checked": on ? "true" : "false",
+        onclick: () => { byPattern = id === "pattern"; show(); (byPattern ? pattern : extensions).focus(); } }, label);
+    }));
+    field.replaceChildren(...(byPattern
+      ? [pattern, h("span", {}, "Searched in each file's path below the image folder (e.g. 2022/case_1/slide.svs, with /). Use ^ and $ to match the whole path; case matters, (?i) ignores it.")]
+      : [extensions, h("span", {}, "Separated by commas, e.g. .svs, .tif")]));
+  };
+  show();
+  return {
+    element: h("div", { class: "field" }, h("span", {}, "Images"), toggle, field),
+    value: () => (byPattern ? { pattern: pattern.value } : { extensions: extensions.value }),
+  };
+}
+
 function newProjectDialog() {
   const name = h("input", { type: "text", placeholder: "e.g. Tumor segmentation" });
   const root = h("input", { type: "text", class: "mono", placeholder: "/path/to/the/images", spellcheck: false });
-  const extensions = h("input", { type: "text", class: "mono", value: ".svs", spellcheck: false });
+  const filter = imageFilter(null);
   const save = h("input", { type: "text", class: "mono", placeholder: "/path/to/the/annotations", spellcheck: false });
   const problem = h("div", { class: "error" });
   const create = h("button", { class: "primary" }, "Create");
   create.addEventListener("click", async () => {
     create.disabled = true;
     try {
-      await api("POST", "/projects", { json: { name: name.value, root: root.value.trim(), extensions: extensions.value, save: save.value.trim() } });
+      await api("POST", "/projects", { json: { name: name.value, root: root.value.trim(), ...filter.value(), save: save.value.trim() } });
       close();
       openWorkspace();
     } catch (e) {
@@ -400,10 +472,37 @@ function newProjectDialog() {
   const close = modal("New annotation project", [
     h("label", { class: "field" }, h("span", {}, "Name"), name),
     folderField("Image folder", root, "All images below this folder (including subfolders) belong to the project. They are only read."),
-    h("label", { class: "field" }, h("span", {}, "File types"), extensions, h("span", {}, "Separated by commas, e.g. .svs, .tif")),
+    filter.element,
     folderField("Save folder", save, "The project file and all annotations are written here. Choose an empty or new folder."),
     problem,
   ], [h("button", { onclick: () => close() }, "Cancel"), create]);
+  name.focus();
+}
+
+// Changes the open project's name, image folder and image filter. The save folder (where the project lives) stays.
+function editProjectDialog(project) {
+  const name = h("input", { type: "text", value: project.name });
+  const root = h("input", { type: "text", class: "mono", value: project.root, spellcheck: false });
+  const filter = imageFilter(project);
+  const problem = h("div", { class: "error" });
+  const save = h("button", { class: "primary" }, "Save");
+  save.addEventListener("click", async () => {
+    save.disabled = true;
+    try {
+      await api("PATCH", "/projects/current", { json: { name: name.value, root: root.value.trim(), ...filter.value() } });
+      close();
+    } catch (e) {
+      problem.textContent = message(e);
+      save.disabled = false;
+    }
+  });
+  const close = modal("Edit project", [
+    h("label", { class: "field" }, h("span", {}, "Name"), name),
+    folderField("Image folder", root, "Annotations belong to an image's path below this folder: a new folder needs the same structure inside."),
+    filter.element,
+    h("p", { class: "faint" }, "Images the new filter leaves out are no longer listed; their annotations stay in the save folder and come back with a filter that includes them."),
+    problem,
+  ], [h("button", { onclick: () => close() }, "Cancel"), save]);
   name.focus();
 }
 
@@ -527,7 +626,7 @@ function infoDialog(project) {
     h("div", { class: "info" },
       row("Image folder", project.root, true),
       row("Save folder", project.save, true),
-      row("File types", project.extensions.join(", ")),
+      project.pattern ? row("Images matching", project.pattern, true) : row("File types", project.extensions.join(", ")),
       row("Images", String(images.length)),
       row("Classes", String(project.classes.length))),
     project.root_missing && h("div", { class: "warn" }, "The image folder does not exist (any more)."),
