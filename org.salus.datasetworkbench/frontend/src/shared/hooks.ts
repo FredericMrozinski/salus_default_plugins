@@ -62,6 +62,34 @@ onEvent((event: WorkbenchEvent) => {
   jobListeners.forEach((l) => l());
 });
 
+/** The Refresh job (backend scan_all): which source cohort it is reading, how many files it has seen there. */
+export type RefreshProgress = { index: number; count: number; source: string; phase: string; files: number };
+let refreshProgress: RefreshProgress | null = null;
+const refreshListeners = new Set<() => void>();
+onEvent((event: WorkbenchEvent) => {
+  if (event.type === "job" && event.kind === "refresh") {
+    refreshProgress = {
+      index: event.index ?? refreshProgress?.index ?? 0,
+      count: event.count ?? refreshProgress?.count ?? 0,
+      source: event.source ?? refreshProgress?.source ?? "",
+      phase: event.phase ?? "scan",
+      files: event.files ?? (event.phase === "scan" ? 0 : refreshProgress?.files ?? 0),
+    };
+  } else if (event.type === "job_done" && event.kind === "refresh") refreshProgress = null;
+  else return;
+  refreshListeners.forEach((l) => l());
+});
+
+export function useRefreshProgress(): RefreshProgress | null {
+  const [, force] = useState(0);
+  useEffect(() => {
+    const listener = () => force((n) => n + 1);
+    refreshListeners.add(listener);
+    return () => void refreshListeners.delete(listener);
+  }, []);
+  return refreshProgress;
+}
+
 export function useJob(target: string | null | undefined): JobInfo | undefined {
   const [, force] = useState(0);
   useEffect(() => {

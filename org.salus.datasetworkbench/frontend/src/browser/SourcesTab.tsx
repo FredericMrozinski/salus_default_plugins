@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createContext, DragEvent, useContext, useState } from "react";
 import { bytes } from "../shared/format";
-import { useDebounced, useJob } from "../shared/hooks";
+import { useDebounced, useJob, useRefreshProgress } from "../shared/hooks";
 import { api, encode } from "../shared/salus";
 import type { FileListing, GroupNode, SearchHit, SourceNode, TreeNode } from "../shared/types";
 import { Icon } from "../shared/icons";
@@ -128,13 +128,34 @@ function useDropTarget(to: string, onOver: (over: boolean) => void) {
   };
 }
 
-/** Waits until the backend has no running jobs (asks it, since events do not always arrive). */
+/** Waits until the backend has no running jobs (asks it, since events do not always arrive). A Refresh of a large remote
+ *  folder can take long, so this waits up to two hours, asking every second. */
 async function waitForJobs() {
-  for (let i = 0; i < 600; i++) {
+  for (let i = 0; i < 7200; i++) {
     const { running } = await api<{ running: number }>("GET", "/jobs");
     if (!running) return;
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => setTimeout(resolve, 1000));
   }
+}
+
+const PHASES: Record<string, string> = { update: "saving", datasets: "updating the datasets", ingest: "reading the CSV" };
+
+/** Progress of Refresh, under the toolbar. It does not block anything: the backend reads the cohorts one after the other in
+ *  the background, and the rest of the workbench keeps working meanwhile. The bar moves on per cohort (how many files a
+ *  folder holds is only known once it has been read). */
+function RefreshBar() {
+  const p = useRefreshProgress();
+  const where = p && p.count ? `${p.index} of ${p.count}${p.source ? `: ${p.source}` : ""}` : "";
+  const what = !p ? "starting…" : PHASES[p.phase] ?? (p.files ? `${p.files.toLocaleString()} files so far` : "reading…");
+  return (
+    <div className="refresh-bar" role="status" aria-live="polite">
+      <div className="refresh-text">
+        <span>Refreshing{where ? ` ${where}` : "…"}</span>
+        <span className="faint"> · {what}</span>
+      </div>
+      {p && p.count ? <progress value={p.index - 1 + (p.phase === "scan" ? 0.3 : 0.8)} max={p.count} /> : <progress />}
+    </div>
+  );
 }
 
 export function SourcesTab() {
@@ -194,6 +215,7 @@ export function SourcesTab() {
           <Icon name="refresh" size={22} />
         </button>
       </div>
+      {refreshing && <RefreshBar />}
       <div className="search-row">
         <input
           type="search"

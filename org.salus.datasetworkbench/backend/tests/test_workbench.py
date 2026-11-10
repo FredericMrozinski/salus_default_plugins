@@ -170,6 +170,86 @@ class DeleteTests(Base):
                 self.wb.catalog.delete_group(bad, force=True)
 
 
+class ScanDuringChangesTests(Base):
+    """The walk of a scan runs without the source's lock; what happens meanwhile must survive."""
+
+    def scan_with(self, source, during):
+        """Scans `source`, calling `during()` after the walk has seen its first file."""
+        import threading
+        from unittest import mock
+        from workbench.sources import FileSource
+        original = FileSource._walk
+
+        def walk(this, progress):
+            for i, item in enumerate(original(this, progress)):
+                yield item
+                if i == 0:
+                    during()
+
+        with mock.patch.object(FileSource, "_walk", walk):
+            self.wb.scan_source(source.id)
+
+    def paths(self, source):
+        with source.connect() as conn:
+            return sorted((r["rel_path"], r["status"]) for r in conn.execute("SELECT rel_path, status FROM items"))
+
+    def test_the_lock_is_free_during_the_walk(self):
+        import threading
+        source = self.file_source()
+        write(source.path / "a.svs")
+        write(source.path / "b.svs")
+        free = []
+
+        def during():  # another thread (an upload, a rename) can take the lock now
+            t = threading.Thread(target=lambda: free.append(source.lock.acquire(timeout=1) and (source.lock.release() or True)))
+            t.start()
+            t.join()
+
+        self.scan_with(source, during)
+        self.assertEqual(free, [True])
+        self.assertEqual(self.paths(source), [("a.svs", "ok"), ("b.svs", "ok")])
+
+    def test_an_upload_during_the_walk_is_kept(self):
+        source = self.file_source()
+        write(source.path / "a.svs")
+        self.scan_with(source, lambda: self.upload(source, "new.svs", b"uploaded"))
+        self.assertEqual(self.paths(source), [("a.svs", "ok"), ("new.svs", "ok")])
+
+    def test_a_file_renamed_or_deleted_during_the_walk_is_not_added_or_lost(self):
+        source = self.file_source()
+        for name in ("a.svs", "b.svs", "c.svs"):
+            write(source.path / name)
+        self.wb.scan_source(source.id)
+        write(source.path / "d.svs")  # new: the walk sees it
+
+        def during():
+            self.wb.rename_item(source.id, "d.svs", "e.svs")  # after the walk saw d.svs, maybe
+            os.remove(source.path / "c.svs")
+
+        self.scan_with(source, during)
+        names = [p for p, status in self.paths(source) if status == "ok"]
+        self.assertNotIn("d.svs", names)  # not added under its old name
+        self.assertIn("a.svs", names)
+        self.assertIn("b.svs", names)
+        self.assertNotIn("c.svs", names)
+        self.wb.scan_source(source.id)  # the next scan sees the rest
+        self.assertEqual([p for p, status in self.paths(source) if status == "ok"], ["a.svs", "b.svs", "e.svs"])
+
+    def test_refresh_scans_the_sources_one_after_the_other_with_progress(self):
+        one, two = self.file_source("one"), self.file_source("two")
+        write(one.path / "a.svs")
+        write(two.path / "b.svs")
+        result = self.wb.scan_all()
+        self.assertEqual(result["started"], 2)
+        progress = [e for e in self.events if e.get("type") == "job" and e.get("kind") == "refresh"]
+        self.assertEqual([(e["index"], e["count"], e["source"]) for e in progress if e.get("files") == 0 and e["phase"] == "scan"],
+                         [(1, 2, "one"), (2, 2, "two")])
+        done = [e for e in self.events if e.get("type") == "job_done" and e.get("kind") == "refresh"]
+        self.assertEqual(len(done), 1)
+        self.assertTrue(done[0]["ok"])
+        self.assertEqual(done[0]["scanned"], 2)
+
+
 class SearchTests(Base):
     def test_global_search_spans_sources_words_and_csv(self):
         self.wb.catalog.create_group("", "cohort")

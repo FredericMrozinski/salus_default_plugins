@@ -11,6 +11,18 @@ Design: `design/dataset-workbench.md` in the Salus repository.
 
 Files and tables open in other plugins through `salus.openFile` (the Relational Viewer for CSV/JSON/SQLite, the Image Viewer for slides).
 
+## Refresh
+
+**Refresh** (Sources tab) reads every source cohort again: file cohorts are scanned for new, moved, changed and gone files, table
+cohorts read their CSV again; then the datasets that use them are updated and their automation runs. It is one background job
+(`refresh`, `POST /scan`) that reads the cohorts **one after the other**, not all at once, so on a large or remote filesystem the walks
+do not compete. A bar under the toolbar shows which cohort it is reading ("2 of 5: Whole Slide Images") and how many files it has
+seen there. Nothing is blocked meanwhile: the walk over a folder, the slow part, runs without the cohort's lock, which is only taken
+for the short database update at the end. Uploads, renames and deletes made during the walk are kept as they are (the scan does
+not undo or duplicate them); a cohort moved or renamed during its walk is left for the next Refresh. A cohort that is being
+scanned on its own (*Rescan files*) is skipped. Code: `Workbench.scan_all` in `backend/workbench/service.py`, `FileSource.scan` in
+`backend/workbench/sources.py`; tests: `ScanDuringChangesTests` in `backend/tests/test_workbench.py`.
+
 ## Automation
 
 The **Automation** button (bolt icon) in the entries panel opens the automation settings in the center panel (like *Edit schema*; *Save and

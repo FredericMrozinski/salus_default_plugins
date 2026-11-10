@@ -118,5 +118,17 @@ export type WorkbenchEvent =
   | { type: "source_changed"; source: string }
   | { type: "dataset_changed"; dataset: string; entry?: number; schema?: boolean; deleted?: boolean }
   | { type: "state"; dataset: string | null; entry: number | null }
-  | { type: "job"; job: string; kind: string; target: string; phase?: string; files?: number; rows?: number }
-  | { type: "job_done"; job: string; kind: string; target: string; ok: boolean; error?: string };
+  | {
+      type: "job";
+      job: string;
+      kind: string;
+      target: string;
+      phase?: string;
+      files?: number;
+      rows?: number;
+      /** Refresh ("refresh"): the source being read, index of count from 1. */
+      index?: number;
+      count?: number;
+      source?: string;
+    }
+  | { type: "job_done"; job: string; kind: string; target: string; ok: boolean; error?: string; scanned?: number };

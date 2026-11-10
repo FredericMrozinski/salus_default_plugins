@@ -68,3 +68,7 @@
 .upload-file-size { white-space: nowrap; }
 .upload-file-error { grid-column: 1 / -1; padding: 0; }
 .tree-hint.warn { color: var(--salus-warning); }
+/* Refresh progress, under the toolbar (SourcesTab.tsx RefreshBar) */
+.refresh-bar { flex: none; display: flex; flex-direction: column; gap: 4px; padding: 6px 10px; background: var(--salus-depth-foreground-1); border-bottom: 2px solid var(--salus-separator-dark); border-image: var(--salus-separator-below); }
+.refresh-text { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.refresh-bar progress { width: 100%; height: 6px; }

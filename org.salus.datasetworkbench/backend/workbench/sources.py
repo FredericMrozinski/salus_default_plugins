@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import threading
 from datetime import date, datetime
 from pathlib import Path
 from typing import Callable
@@ -109,6 +110,22 @@ def q(identifier: str) -> str:
 
 
 # --------------------------------------------------------------------------- base
+
+# What happened to a file source while a scan walks its folder, by source database: the files recorded (register: an
+# upload), which the scan leaves as they are since what it saw of them may be older, and _MOVED_DURING_SCAN once a file
+# or folder was renamed or deleted, so the scan checks that what it saw is still there (on a first scan of a big folder
+# that check would cost as much as the walk, so it is only made then).
+_recorded_during_scan: dict[str, set[str]] = {}
+_scans_guard = threading.Lock()
+_MOVED_DURING_SCAN = "\0moved"
+
+
+def _mark_during_scan(db_path: Path, what: str) -> None:
+    with _scans_guard:
+        marks = _recorded_during_scan.get(str(db_path))
+        if marks is not None:
+            marks.add(what)
+
 
 class Source:
     kind = ""
@@ -265,61 +282,93 @@ class FileSource(Source):
 
         Files that are gone stay as `missing` items when a dataset references them (`referenced`: the item ids that
         datasets use), so those entries show 'source missing'; the others are forgotten. Without `referenced` every
-        gone file stays as missing."""
-        with self.lock:
+        gone file stays as missing.
+
+        The walk over the files, the slow part on a large or remote folder, runs without the source's lock, so uploads,
+        renames and the like are not held up by it; only the comparison with the database and its update take the lock.
+        What changed in the meantime is left alone: a file recorded during the walk (an upload) keeps its row as it is,
+        a file the walk saw that is gone now (deleted or renamed meanwhile) is not added, and a file the walk did not
+        see that is there now is not taken for gone."""
+        key = str(self.db_path)
+        with _scans_guard:
+            _recorded_during_scan.setdefault(key, set())
+        try:
             seen = {rel: st for rel, st in self._walk(progress)}
-            now = now_iso()
-            with self.connect() as conn:
-                existing = {r["rel_path"]: r for r in conn.execute(
-                    "SELECT id, rel_path, size, mtime_ns, status FROM items")}
-                new_paths = [p for p in seen if p not in existing]
-                orphans = [r for p, r in existing.items() if p not in seen]
-                pool: dict[tuple, list] = {}
-                for r in orphans:
-                    pool.setdefault((r["size"], r["mtime_ns"]), []).append(r)
-                moved, created = [], []
-                for rel in sorted(new_paths):
+            if progress:
+                progress({"phase": "update", "files": len(seen)})
+            with self.lock:
+                with _scans_guard:
+                    fresh = _recorded_during_scan.pop(key, set())
+                return self._apply_scan(seen, fresh, referenced)
+        finally:
+            with _scans_guard:
+                _recorded_during_scan.pop(key, None)
+
+    def _apply_scan(self, seen: dict, fresh: set, referenced: set[str] | None) -> dict:
+        """The database part of scan(), under the lock."""
+        if not self.db_path.exists():  # the source was moved, renamed or removed during the walk: what it saw is stale
+            return {"files": 0, "new": 0, "moved": 0, "missing": 0, "removed": 0, "skipped": True}
+        moved_meanwhile = _MOVED_DURING_SCAN in fresh
+        fresh.discard(_MOVED_DURING_SCAN)
+        for p in fresh:
+            seen.pop(p, None)
+        now = now_iso()
+        with self.connect() as conn:
+            existing = {r["rel_path"]: r for r in conn.execute(
+                "SELECT id, rel_path, size, mtime_ns, status FROM items")}
+            if moved_meanwhile:  # what the walk saw may have been renamed or deleted since
+                for p in [p for p in seen if p not in existing and not (self.path / p).is_file()]:
+                    del seen[p]
+            new_paths = [p for p in seen if p not in existing]
+            orphans = [r for p, r in existing.items()
+                       if p not in seen and p not in fresh and not (self.path / p).is_file()]
+            pool: dict[tuple, list] = {}
+            for r in orphans:
+                pool.setdefault((r["size"], r["mtime_ns"]), []).append(r)
+            moved, created = [], []
+            for rel in sorted(new_paths):
+                st = seen[rel]
+                candidates = pool.get((st.st_size, st.st_mtime_ns))
+                match = None
+                if candidates:
+                    name = rel.rsplit("/", 1)[-1]
+                    match = next((c for c in candidates if c["rel_path"].rsplit("/", 1)[-1] == name), candidates[0])
+                    candidates.remove(match)
+                if match:
+                    moved.append((rel, match["id"]))
+                else:
+                    created.append(rel)
+            moved_ids = {item_id for _, item_id in moved}
+            gone = [r for r in orphans if r["id"] not in moved_ids]
+            if referenced is None:
+                forgotten = []
+            else:  # also items that were missing already and are no longer used
+                forgotten = [r["id"] for r in gone if r["id"] not in referenced]
+            vanished = [r["id"] for r in gone if r["status"] != "missing" and r["id"] not in forgotten]
+            with Tx(conn):
+                for rel, item_id in moved:
                     st = seen[rel]
-                    candidates = pool.get((st.st_size, st.st_mtime_ns))
-                    match = None
-                    if candidates:
-                        name = rel.rsplit("/", 1)[-1]
-                        match = next((c for c in candidates if c["rel_path"].rsplit("/", 1)[-1] == name), candidates[0])
-                        candidates.remove(match)
-                    if match:
-                        moved.append((rel, match["id"]))
-                    else:
-                        created.append(rel)
-                moved_ids = {item_id for _, item_id in moved}
-                gone = [r for r in orphans if r["id"] not in moved_ids]
-                if referenced is None:
-                    forgotten = []
-                else:  # also items that were missing already and are no longer used
-                    forgotten = [r["id"] for r in gone if r["id"] not in referenced]
-                vanished = [r["id"] for r in gone if r["status"] != "missing" and r["id"] not in forgotten]
-                with Tx(conn):
-                    for rel, item_id in moved:
-                        st = seen[rel]
-                        conn.execute("UPDATE items SET rel_path=?, ext=?, size=?, mtime_ns=?, status='ok', last_seen=? WHERE id=?",
-                                     (rel, ext_of(rel), st.st_size, st.st_mtime_ns, now, item_id))
-                    conn.executemany(
-                        "INSERT INTO items(id, rel_path, ext, size, mtime_ns, status, first_seen, last_seen) VALUES(?,?,?,?,?,'ok',?,?)",
-                        [(new_id(), rel, ext_of(rel), seen[rel].st_size, seen[rel].st_mtime_ns, now, now) for rel in created])
-                    conn.executemany(
-                        "UPDATE items SET ext=?, size=?, mtime_ns=?, status='ok', last_seen=? WHERE rel_path=?",
-                        [(ext_of(rel), seen[rel].st_size, seen[rel].st_mtime_ns, now, rel) for rel in seen if rel in existing])
-                    for ids in chunks(vanished):
-                        conn.execute(f"UPDATE items SET status='missing' WHERE id IN ({','.join('?' * len(ids))})", ids)
-                    for ids in chunks(forgotten):
-                        conn.execute(f"DELETE FROM items WHERE id IN ({','.join('?' * len(ids))})", ids)
-                    meta_set(conn, "last_scan", now)
-            return {"files": len(seen), "new": len(created), "moved": len(moved), "missing": len(vanished), "removed": len(forgotten)}
+                    conn.execute("UPDATE items SET rel_path=?, ext=?, size=?, mtime_ns=?, status='ok', last_seen=? WHERE id=?",
+                                 (rel, ext_of(rel), st.st_size, st.st_mtime_ns, now, item_id))
+                conn.executemany(
+                    "INSERT INTO items(id, rel_path, ext, size, mtime_ns, status, first_seen, last_seen) VALUES(?,?,?,?,?,'ok',?,?)",
+                    [(new_id(), rel, ext_of(rel), seen[rel].st_size, seen[rel].st_mtime_ns, now, now) for rel in created])
+                conn.executemany(
+                    "UPDATE items SET ext=?, size=?, mtime_ns=?, status='ok', last_seen=? WHERE rel_path=?",
+                    [(ext_of(rel), seen[rel].st_size, seen[rel].st_mtime_ns, now, rel) for rel in seen if rel in existing])
+                for ids in chunks(vanished):
+                    conn.execute(f"UPDATE items SET status='missing' WHERE id IN ({','.join('?' * len(ids))})", ids)
+                for ids in chunks(forgotten):
+                    conn.execute(f"DELETE FROM items WHERE id IN ({','.join('?' * len(ids))})", ids)
+                meta_set(conn, "last_scan", now)
+        return {"files": len(seen), "new": len(created), "moved": len(moved), "missing": len(vanished), "removed": len(forgotten)}
 
     def register(self, rel_path: str, file_hash: str | None = None) -> dict:
         """Records one file (after an upload) as an item; an existing item keeps its id."""
         rel_path = safe_rel_path(rel_path)
         st = (self.path / rel_path).stat()
         now = now_iso()
+        _mark_during_scan(self.db_path, rel_path)
         with self.lock, self.connect() as conn:
             row = conn.execute("SELECT id FROM items WHERE rel_path=?", (rel_path,)).fetchone()
             if row:
@@ -472,6 +521,7 @@ class FileSource(Source):
         dest_rel = parent + new_name
         if dest_rel == rel:
             return rel
+        _mark_during_scan(self.db_path, _MOVED_DURING_SCAN)
         with self.lock:
             rename_on_disk(self.path / rel, self.path / dest_rel)
             with self.connect() as conn, Tx(conn):
@@ -488,6 +538,7 @@ class FileSource(Source):
         as `missing`, so those entries show 'source missing'; the others are forgotten."""
         rel = safe_rel_path(rel_path)
         kind = self._kind(rel)
+        _mark_during_scan(self.db_path, _MOVED_DURING_SCAN)
         with self.lock:
             target = self.path / rel
             if kind == "dir":

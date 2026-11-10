@@ -62,30 +62,55 @@ class Workbench:
     # -- sources
     def scan_source(self, source_id: str) -> dict:
         source = self.catalog.find_source(source_id)
+        return self.start_job("scan", source_id, lambda progress: self._scan(source_id, source, progress))
 
-        def work(progress):
-            if isinstance(source, FileSource):
-                result = source.scan(progress, self.referenced_items(source_id))
-            else:
-                if source.declared_columns():
-                    result = source.ingest(progress)
-                else:
-                    result = {}
-            self.source_changed(source_id)
-            return result
-
-        return self.start_job("scan", source_id, work)
+    def _scan(self, source_id: str, source, progress) -> dict:
+        """Reads one source again (files: a scan; a table: its CSV again) and updates what references it."""
+        if isinstance(source, FileSource):
+            result = source.scan(progress, self.referenced_items(source_id))
+        elif source.declared_columns():
+            result = source.ingest(progress)
+        else:
+            result = {}
+        if progress:
+            progress({"phase": "datasets"})
+        self.source_changed(source_id)
+        return result
 
     def scan_all(self) -> dict:
-        """Starts a scan of every source (the Refresh button); sources that are being scanned already are skipped."""
-        started = 0
-        for source_id in self.catalog.source_ids():
-            try:
-                if not self.scan_source(source_id)["running"]:
-                    started += 1
-            except WorkbenchError:
-                continue  # a broken source must not keep the others from being read
-        return {"started": started, "running": self.running_jobs()}
+        """The Refresh button: one job ("refresh") that scans the sources one after the other, not all at once (on a
+        large or remote filesystem, parallel walks only compete for the disk and for the backend's threads).
+
+        Its progress events carry {phase, index, count, source, files}: the source being read (index of count, from 1),
+        and how many files it has seen so far. A source that is being scanned on its own already is skipped.
+        Returns {started: sources to scan, running}; a second Refresh while one runs starts nothing."""
+        source_ids = self.catalog.source_ids()
+
+        def work(progress):
+            done = skipped = 0
+            for index, source_id in enumerate(source_ids, 1):
+                key = ("scan", source_id)
+                with self._guard:
+                    if key in self._running:
+                        skipped += 1
+                        continue
+                    self._running.add(key)
+                try:
+                    source = self.catalog.find_source(source_id)
+                    name = source.info().get("name", "")
+                    progress({"phase": "scan", "index": index, "count": len(source_ids), "source": name, "files": 0})
+                    self._scan(source_id, source,
+                               lambda info: progress({**info, "index": index, "count": len(source_ids), "source": name}))
+                    done += 1
+                except WorkbenchError:
+                    continue  # a broken source must not keep the others from being read
+                finally:
+                    with self._guard:
+                        self._running.discard(key)
+            return {"scanned": done, "skipped": skipped}
+
+        job = self.start_job("refresh", "all", work)
+        return {"started": 0 if job["running"] else len(source_ids), "running": self.running_jobs(), "job": job["job"]}
 
     def running_jobs(self) -> int:
         with self._guard:
