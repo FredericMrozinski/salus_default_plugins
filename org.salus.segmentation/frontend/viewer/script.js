@@ -198,6 +198,7 @@ async function openImage(path) {
     TileSize: slide.tile_size,
     Size: { Width: slide.width, Height: slide.height },
   }, {
+    rotateKeys: false, // R and F would turn or mirror the image under the annotations; the pan and zoom keys stay
     // A pen only draws (see "pen and touch" below); fingers keep OpenSeadragon's defaults: drag to pan, pinch to zoom.
     gestureSettingsPen: { dragToPan: false, clickToZoom: false, dblClickToZoom: false, flickEnabled: false, pinchToZoom: false },
   });

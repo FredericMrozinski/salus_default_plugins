@@ -100,7 +100,9 @@ shown in the tools panel for now; the backend still offers them. The
 
 - **Pan** (`V`), or hold `Ctrl` or `Space` with any tool. The mouse wheel always zooms. The viewer takes the keyboard
   when the mouse comes onto it, so keys work there right after a click in another panel; Space never presses a button
-  in the other panels.
+  in the other panels. OpenSeadragon's own keys work in the viewer too: `W` `A` `S` `D` and the arrow keys pan, `Shift+W` /
+  `Shift+S` (or `=` / `-`) zoom, `0` fits the image. Its rotate (`R`, `Shift+R`) and flip (`F`) keys are turned off, so the
+  image never turns under the annotations (`rotateKeys: false` in `shared/osd.js`).
 - **Right-drag** erases with any tool but Pan (with the smart eraser in a smart mode); with the Eraser chosen it paints with
   the brush instead.
 - **Pen and fingers** (iPad with Apple Pencil, Surface or Wacom pens; Pointer Events `pointerType`): the pen always

@@ -55,9 +55,11 @@ function addControls(viewer) {
 /**
  * @param {HTMLElement} element
  * @param {object} image  Deep Zoom description: {Url, Format, Overlap, TileSize, Size: {Width, Height}}
- * @param {object} [options]  more OpenSeadragon options
+ * @param {object} [options]  more OpenSeadragon options, and `rotateKeys: false`, which turns off OpenSeadragon's R and
+ *   Shift+R (rotate by 90°) and F (flip) keys; the other keys (WASD and the arrows pan, = and - zoom, 0 fits the image)
+ *   keep working. The segmentation viewer turns them off, so the image cannot turn under the annotations.
  */
-export function createViewer(element, image, options = {}) {
+export function createViewer(element, image, { rotateKeys = true, ...options } = {}) {
   const viewer = OpenSeadragon({
     element,
     tileSources: { Image: { xmlns: "http://schemas.microsoft.com/deepzoom/2008", ...image } },
@@ -75,6 +77,12 @@ export function createViewer(element, image, options = {}) {
     ...options,
   });
   if (options.showNavigationControl !== true) addControls(viewer);
+  if (!rotateKeys) {
+    viewer.addHandler("canvas-key", (event) => {
+      const code = event.originalEvent?.code;
+      if (code === "KeyR" || code === "KeyF") event.preventDefaultAction = true;
+    });
+  }
   return viewer;
 }
 
