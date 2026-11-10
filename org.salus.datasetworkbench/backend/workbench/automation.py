@@ -2,14 +2,16 @@
 
 Settings (kept in the dataset's `meta` table under "automation", so they live and die with the dataset):
 
-    {"rules": {"<slot id>": {"mode": "source"}                                  # at most one, a file or row slot
+    {"rules": {"<slot id>": {"mode": "source", "filter": "<regex>"}             # at most one, a file or row slot; filter optional
                "<slot id>": {"mode": "derive", "from": <slot id>, "read": "<regex>", "value": "<template>"}}}
 
 A slot without a rule is left empty ("leave empty" in the dialog).
 
 * **source**: every item of the slot's source cohorts (files with an allowed extension, rows of a table) that no entry has in that
   slot yet becomes a new entry, with the item in that slot. Runs whenever a source is refreshed (scan, upload, ingest, the
-  dataset check) and when the settings are saved.
+  dataset check) and when the settings are saved. With a `filter`, only items whose text (the relative path of a file, the
+  key of a row) the regex finds (re.search, not anchored) become entries; the others are skipped, and entries that exist
+  already are kept whatever the filter says.
 * **derive**: `read` is searched (re.search, Python syntax, not anchored) in the text of the `from` slot: the relative path for a
   file, the row key for a row, the value for a value slot. The result is the `value` template with `\\1`..`\\99` and `\\g<name>`
   (or `\\g<0>` for the whole match) replaced; `\\\\` is a backslash. Unlike sed, the result is only the template, not the input
@@ -100,6 +102,13 @@ def normalize(raw, slots: list[dict]) -> dict:
             if slot["kind"] == "value":
                 raise WorkbenchError(f"{_slot_text(slot)}: only a file or row field can be created from a source cohort.")
             rules[key] = {"mode": "source"}
+            item_filter = str(rule.get("filter") or "")
+            if item_filter:
+                try:
+                    re.compile(item_filter)
+                except re.error as e:
+                    raise WorkbenchError(f"{_slot_text(slot)}: invalid filter: {e}") from None
+                rules[key]["filter"] = item_filter
         elif mode == "derive":
             origin = str(rule.get("from") or "")
             if origin not in by_id:
@@ -201,6 +210,25 @@ def clear_issue(conn, entry_id: int, slot_id: int) -> None:
 
 # --------------------------------------------------------------------------- running
 
+def source_filter(rule: dict) -> re.Pattern | None:
+    """The compiled filter of a source rule, or None when every item is taken (no filter, or a stored one that no longer
+    compiles: refused when saved, so only a hand-edited database has one)."""
+    text = str(rule.get("filter") or "")
+    if not text:
+        return None
+    try:
+        return re.compile(text)
+    except re.error:
+        return None
+
+
+def _matching(source, item_ids: list[str], pattern: re.Pattern | None, columns) -> list[str]:
+    if pattern is None or not item_ids:
+        return item_ids
+    labels = source.labels(item_ids, columns)
+    return [i for i in item_ids if i in labels and pattern.search(labels[i])]
+
+
 def _cell_text(slot: dict, cell: dict) -> str | None:
     """The text a derivation reads from a cell, or None when the cell is empty."""
     if slot["kind"] == "value":
@@ -248,6 +276,7 @@ def run(dataset) -> dict:
         new_items = []
         if source_key is not None:
             slot = by_id[source_key]
+            pattern = source_filter(rules[source_key])
             with dataset.connect() as conn:
                 present = {(r[0], r[1]) for r in conn.execute(
                     "SELECT ref_source_id, ref_item_id FROM cells WHERE slot_id=? AND ref_item_id IS NOT NULL", (slot["id"],))}
@@ -257,6 +286,7 @@ def run(dataset) -> dict:
                     continue
                 missing = [i for i in source.all_items(slot["extensions"] or None, slot["columns"] or None)
                            if (source_id, i) not in present]
+                missing = _matching(source, missing, pattern, slot["columns"] or None)
                 if missing:
                     fps = source.fingerprints(missing, slot["columns"] or None)
                     new_items += [(source_id, i, *fps[i]) for i in missing if i in fps]
@@ -324,24 +354,43 @@ def run(dataset) -> dict:
 def preview(dataset, raw: dict, sample: str | None) -> dict:
     """What the settings in the dialog would give for one sample (not saved). Problems are reported per field, not raised.
 
-    {samples: [texts of the first items of the source field], sample, error (settings as a whole), results: {slot id: {text, error}}}"""
+    {samples: [texts of the first items of the source field that pass its filter], sample, error (settings as a whole),
+     results: {slot id: {text, error}},
+     filter: {matching, total, skipped: [texts of the first items it leaves out], error} (with a source field)}"""
     with dataset.connect() as conn:
         slots = dataset.slots(conn)
     by_id = {str(s["id"]): s for s in slots}
-    out: dict = {"samples": [], "sample": sample, "error": None, "results": {}}
+    out: dict = {"samples": [], "sample": sample, "error": None, "results": {}, "filter": None}
     rules = {str(k): r for k, r in ((raw or {}).get("rules") or {}).items() if isinstance(r, dict) and str(k) in by_id}
     source_key = next((k for k, r in rules.items() if r.get("mode") == "source"), None)
     if source_key is not None and by_id[source_key]["kind"] != "value":
         slot = by_id[source_key]
+        columns = slot["columns"] or None
+        filter_text = str(rules[source_key].get("filter") or "")
+        pattern, filter_error = None, None
+        if filter_text:
+            try:
+                pattern = re.compile(filter_text)
+            except re.error as e:
+                filter_error = f"invalid filter: {e}"
+        info = {"matching": 0, "total": 0, "skipped": [], "error": filter_error}
         for source_id in slot["sources"]:
             source = dataset.catalog.try_source(source_id)
             if source is None:
                 continue
-            ids = source.all_items(slot["extensions"] or None, slot["columns"] or None)[:20 - len(out["samples"])]
-            fps = source.fingerprints(ids, slot["columns"] or None) if ids else {}
-            out["samples"] += [fps[i][1] for i in ids if i in fps]
-            if len(out["samples"]) >= 20:
-                break
+            ids = source.all_items(slot["extensions"] or None, columns)
+            labels = source.labels(ids, columns) if ids else {}
+            for i in ids:
+                if i not in labels:
+                    continue
+                info["total"] += 1
+                if pattern is None or pattern.search(labels[i]):
+                    info["matching"] += 1
+                    if len(out["samples"]) < 20:
+                        out["samples"].append(labels[i])
+                elif len(info["skipped"]) < 5:
+                    info["skipped"].append(labels[i])
+        out["filter"] = info
     if sample is None:
         sample = out["samples"][0] if out["samples"] else ""
         out["sample"] = sample

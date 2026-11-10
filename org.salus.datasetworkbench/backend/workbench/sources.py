@@ -198,6 +198,11 @@ class Source:
         """Ids of every current item (what a dataset's automation turns into entries)."""
         return []
 
+    def labels(self, item_ids, columns=None) -> dict:
+        """{item id: label} (the relative path of a file, the key of a row) without touching the files: what an automation's
+        source filter is matched against."""
+        return {i: label for i, (_, label) in self.fingerprints(item_ids, columns).items()}
+
     def lookup(self, label: str, columns=None) -> list[str]:
         """Ids of the items a derived text names (a relative path, a file name or a row key)."""
         return []
@@ -415,6 +420,14 @@ class FileSource(Source):
             args += [e.lower() for e in extensions]
         with self.connect() as conn:
             return [r[0] for r in conn.execute(sql + " ORDER BY rel_path", args)]
+
+    def labels(self, item_ids, columns=None) -> dict:
+        found = {}
+        with self.connect() as conn:
+            for ids in chunks(list(item_ids)):
+                for r in conn.execute(f"SELECT id, rel_path FROM items WHERE id IN ({','.join('?' * len(ids))})", ids):
+                    found[r["id"]] = r["rel_path"]
+        return found
 
     def lookup(self, label: str, columns=None) -> list[str]:
         """The item at this relative path; otherwise every item with this file name (when `label` has no folder)."""
@@ -794,6 +807,9 @@ class TableSource(Source):
             return []
         with self.connect() as conn:
             return [r[0] for r in conn.execute("SELECT _key FROM data ORDER BY _row")]
+
+    def labels(self, item_ids, columns=None) -> dict:
+        return {i: i for i in item_ids}  # a row's id is its key
 
     def lookup(self, label: str, columns=None) -> list[str]:
         if not self._columns_for(columns) or not self._has_data():
