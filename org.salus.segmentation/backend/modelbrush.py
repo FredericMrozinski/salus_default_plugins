@@ -26,6 +26,7 @@ import importlib
 import logging
 import pkgutil
 import threading
+import time
 from collections import OrderedDict
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
@@ -34,6 +35,7 @@ from typing import Callable
 import numpy as np
 
 import smartbrush as sb
+import timing
 from errors import ViewerError
 
 log = logging.getLogger("segmentation.models")
@@ -112,8 +114,14 @@ class View:
 
 
 def _segment(view: View, slide) -> View:
+    # Runs in the model's worker thread, outside the request: timed here and logged on its own line.
+    start = time.perf_counter()
     rgb = np.ascontiguousarray(sb.read_view(slide, view.x, view.y, view.scale, view.size))
+    read = time.perf_counter()
     out = np.asarray(view.model.segment(rgb))
+    if timing.ENABLED:
+        timing.log.info("timing model %s view %dx%d: read slide %.0f ms, model %.0f ms (the first includes loading it)",
+                        view.model.id, view.size, view.size, (read - start) * 1000, (time.perf_counter() - read) * 1000)
     if out.shape != rgb.shape[:2]:
         raise ValueError(f"the model returned a map of shape {out.shape}, not {rgb.shape[:2]}")
     if view.model.output == "edges":
@@ -260,7 +268,8 @@ class ModelStroke(sb.Stroke):
     def _dab(self, read_region, pu: int, pv: int, keep_seeds=None) -> dict | None:
         s, r = self.scale, self.inner
         px, py = self.x0 + (pu + 0.5) / s, self.y0 + (pv + 0.5) / s  # the centre of grid pixel (pu, pv), level 0
-        view = view_at(self.model, self.slide, self.image, s, px, py, r + 1)
+        with timing.step("model view"):
+            view = view_at(self.model, self.slide, self.image, s, px, py, r + 1)
         cx, cy = (int(np.floor(c)) for c in view.pixel(px, py))
         n, o = 2 * sb.OUTER + 1, sb.OUTER
         mask = np.zeros((n, n), bool)
@@ -268,7 +277,9 @@ class ModelStroke(sb.Stroke):
         yy, xx = np.mgrid[-r:r + 1, -r:r + 1]
         disk = xx * xx + yy * yy <= r * r
         if self.model.output == "edges":
-            mask[o - r:o + r + 1, o - r:o + r + 1] = fill_between_edges(window, disk, self.model.close, self.model.neighbours)
+            with timing.step("rays"):
+                mask[o - r:o + r + 1, o - r:o + r + 1] = fill_between_edges(window, disk, self.model.close,
+                                                                            self.model.neighbours)
         elif view.labels[cy, cx]:
             mask[o - r:o + r + 1, o - r:o + r + 1] = (window == view.labels[cy, cx]) & disk
         u0, v0 = pu - o, pv - o
