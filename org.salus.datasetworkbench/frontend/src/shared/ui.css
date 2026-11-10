@@ -80,3 +80,7 @@ button.small:has(.icon) { display: inline-flex; align-items: center; gap: 2px; p
 .setup-notice h2 { margin: 0; font-size: 16px; }
 .setup-notice p { margin: 0; }
 .warn-line { color: var(--salus-warning); font-size: 12px; word-break: break-word; }
+/* Automation conflicts (shared/automationApply.tsx) */
+.conflict-table { width: 100%; border-collapse: collapse; font-size: 12px; background: var(--salus-depth-default); border-radius: var(--salus-radius); }
+.conflict-table th { text-align: left; font-weight: 600; background: var(--salus-depth-foreground-1); }
+.conflict-table th, .conflict-table td { padding: 4px 8px; border-bottom: 1px solid var(--salus-border); overflow-wrap: anywhere; }

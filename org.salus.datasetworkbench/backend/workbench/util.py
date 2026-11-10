@@ -4,6 +4,8 @@ import hashlib
 import re
 import sqlite3
 import threading
+import time
+import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -102,8 +104,17 @@ def resolve_inside(base: Path, rel: str, allow_empty: bool = True) -> Path:
 
 # Opening and closing SQLite connections from many threads at once can hang inside SQLite (seen with the Python/SQLite
 # builds of conda: several threads stuck in connect/close, none holding a transaction). So only one thread at a time
-# opens or closes a connection; this takes microseconds, the queries themselves still run in parallel.
+# opens or closes a connection; the queries themselves still run in parallel.
+#
+# That is only quick if closing is quick. Closing the last connection to a database in WAL mode checkpoints the WAL into
+# the database file, and after a large write (a scan that recorded many files, an automation that created many entries)
+# that is a lot of writing, slow on a network filesystem; done under this lock it held up every request of the backend
+# (504s from Salus long after a Refresh). So a connection that changed many rows checkpoints first, outside the lock
+# (PASSIVE: never waits for readers), and the close under the lock has next to nothing left to do.
 _open_close = threading.Lock()
+CHECKPOINT_AFTER_CHANGES = 1000
+SLOW_SECONDS = 2.0
+log = logging.getLogger("workbench.db")
 
 
 class Conn(sqlite3.Connection):
@@ -113,8 +124,22 @@ class Conn(sqlite3.Connection):
         try:
             return super().__exit__(exc_type, exc, tb)
         finally:
+            if self.total_changes >= CHECKPOINT_AFTER_CHANGES and not self.in_transaction:
+                started = time.monotonic()
+                try:
+                    self.execute("PRAGMA wal_checkpoint(PASSIVE)")
+                except sqlite3.Error as e:
+                    log.warning("checkpoint failed: %s", e)
+                took = time.monotonic() - started
+                if took > SLOW_SECONDS:
+                    log.warning("checkpoint after %d changes took %.1f s", self.total_changes, took)
+            started = time.monotonic()
             with _open_close:
+                waited = time.monotonic() - started
                 self.close()
+            took = time.monotonic() - started
+            if took > SLOW_SECONDS:
+                log.warning("closing a database took %.1f s (%.1f s waiting for another open/close)", took, waited)
 
 
 def connect(path: Path, create: bool = False) -> sqlite3.Connection:

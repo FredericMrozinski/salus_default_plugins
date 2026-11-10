@@ -10,12 +10,13 @@ Configuration: the workbench folder is the `root` setting of the plugin (configu
 import asyncio
 import faulthandler
 import logging
+import time
 import signal
 from functools import wraps
 
 import salus_sdk as salus
 from workbench.active import Active
-from workbench.automation import preview
+from workbench.automation import conflicts, preview
 from workbench.settings import RootSettings
 from workbench.uploads import CHUNK_SIZE
 from workbench.util import WorkbenchError
@@ -37,14 +38,22 @@ settings = RootSettings(app.config)
 wb = Active(settings, notify)  # use it like a Workbench; it is the one for the configured folder
 
 
+SLOW_REQUEST_SECONDS = 5.0  # Salus gives up after 30 s (504); slower requests are logged with their time, to find why
+
+
 def api(handler):
-    """Turns WorkbenchError into an HTTP error with a readable message."""
+    """Turns WorkbenchError into an HTTP error with a readable message, and logs requests that take long."""
     @wraps(handler)
     def wrapped(req):
+        started = time.monotonic()
         try:
             return handler(req)
         except WorkbenchError as e:
             raise salus.HTTPError(e.status, e.message) from None
+        finally:
+            took = time.monotonic() - started
+            if took > SLOW_REQUEST_SECONDS:
+                log.warning("slow request: %s %s took %.1f s", getattr(req, "method", "?"), getattr(req, "path", "?"), took)
     return wrapped
 
 
@@ -362,15 +371,33 @@ def get_automation(req):
     return wb.datasets.get(req.params["id"]).automation()
 
 
+def overwrite_mode(data: dict) -> bool:
+    """{mode: "fill"} (the default: only empty fields) or {mode: "overwrite"} (derived fields with another value too)."""
+    mode = data.get("mode") or "fill"
+    if mode not in ("fill", "overwrite"):
+        raise salus.HTTPError(400, "mode is 'fill' or 'overwrite'.")
+    return mode == "overwrite"
+
+
 @route("PUT", "/datasets/{id}/automation")
 def put_automation(req):
-    """Saves the automation settings ({rules}) and applies them in the background (job "automation")."""
-    return wb.set_automation(req.params["id"], body(req))
+    """Saves the automation settings ({rules, mode}) and applies them in the background (job "automation")."""
+    data = body(req)
+    return wb.set_automation(req.params["id"], data, overwrite_mode(data))
 
 
 @route("POST", "/datasets/{id}/automation/run")
 def run_automation(req):
-    return wb.run_automation(req.params["id"])
+    """Applies the saved settings now ({mode}, see overwrite_mode), in the background (job "automation")."""
+    return wb.run_automation(req.params["id"], overwrite_mode(body(req)))
+
+
+@route("POST", "/datasets/{id}/automation/conflicts")
+def automation_conflicts(req):
+    """How many existing values applying settings would replace ({rules}: unsaved ones; {}: the saved ones), with a few
+    examples: {conflicts, examples: [{entry, field, current, derived}]}. Nothing is changed."""
+    data = body(req)
+    return conflicts(wb.datasets.get(req.params["id"]), data if "rules" in data else None)
 
 
 @route("POST", "/datasets/{id}/automation/preview")
@@ -396,6 +423,25 @@ def entries(req):
     dataset = wb.datasets.get(req.params["id"])
     return dataset.list_entries(number(req, "limit", 50, 500), number(req, "offset", 0, 10**9),
                                 req.query.get("state") or None, req.query.get("q", ""))
+
+
+@route("GET", "/datasets/{id}/entry-ids")
+def entry_ids(req):
+    """The ids of all entries the list shows for {state, q}, in its order: selecting all of them, or a range."""
+    dataset = wb.datasets.get(req.params["id"])
+    return {"ids": dataset.entry_ids(req.query.get("state") or None, req.query.get("q", ""))}
+
+
+@route("POST", "/datasets/{id}/entries/delete")
+def delete_entries(req):
+    """Deletes several entries ({ids}); the frontend has it confirmed by typing "delete". Returns {deleted}."""
+    dataset = wb.datasets.get(req.params["id"])
+    ids = body(req).get("ids")
+    if not isinstance(ids, list) or not all(isinstance(i, int) for i in ids):
+        raise salus.HTTPError(400, "Expected {ids: [entry ids]}.")
+    deleted = dataset.delete_entries(ids)
+    notify({"type": "dataset_changed", "dataset": dataset.id, "deleted": True})
+    return {"deleted": deleted}
 
 
 @route("POST", "/datasets/{id}/entries")

@@ -17,8 +17,10 @@ A slot without a rule is left empty ("leave empty" in the dialog).
   (or `\\g<0>` for the whole match) replaced; `\\\\` is a backslash. Unlike sed, the result is only the template, not the input
   with the match replaced. A value slot gets the text converted to its type; a file or row slot links the item the text names
   (a relative path or, without a folder, a unique file name; a row key) in one of its sources.
-  Derivations chain: a slot may derive from a derived slot (cycles are refused). Only empty cells are filled, so a value typed
-  by hand is never overwritten; a derivation that fails (no match, empty result, wrong type, no such item) leaves the cell
+  Derivations chain: a slot may derive from a derived slot (cycles are refused). Normally only empty cells are filled, so a
+  value typed by hand stays. When the user applies the settings (Save and apply, Run automation now) and existing values
+  differ from what the derivation gives (`conflicts`), they choose: cancel, fill in the missing ones only, or overwrite
+  those values too (`run(overwrite=True)`). The runs on a refresh only ever fill. A derivation that fails (no match, empty result, wrong type, no such item) leaves the cell
   empty and flags it "invalid" with the reason until the cell is filled (by hand, or by a later run that succeeds).
 """
 from __future__ import annotations
@@ -258,9 +260,12 @@ def _converted(slot: dict, text: str):
     return coerce_value(slot["value_type"], text)
 
 
-def run(dataset) -> dict:
-    """Applies the settings to the dataset: new entries from the source cohort, then the derivations. Returns counts."""
-    result = {"created": 0, "derived": 0, "flagged": 0}
+def run(dataset, overwrite: bool = False) -> dict:
+    """Applies the settings to the dataset: new entries from the source cohort, then the derivations. Returns counts.
+
+    `overwrite`: a derived field that has a value already gets the derived one when they differ (the user chose
+    "Overwrite existing"); otherwise ("Fill in missing", and every automatic run on a refresh) only empty cells are filled."""
+    result = {"created": 0, "derived": 0, "flagged": 0, "overwritten": 0}
     with dataset.lock:
         with dataset.connect() as conn:
             slots = dataset.slots(conn)
@@ -306,49 +311,113 @@ def run(dataset) -> dict:
                              (source_id, item, fingerprint, label, entry_id, int(source_key)))
                 result["created"] += 1
             if derive:
-                cells: dict[int, dict[int, dict]] = {}
-                wanted = {s["id"] for s, _ in derive} | {r["from"] for _, r in derive}
-                for c in conn.execute(f"SELECT * FROM cells WHERE slot_id IN ({','.join('?' * len(wanted))})", sorted(wanted)):
-                    cells.setdefault(c["entry_id"], {})[c["slot_id"]] = dict(c)
-                for entry_id, row in cells.items():
-                    for slot, rule in derive:
-                        cell, origin = row.get(slot["id"]), row.get(rule["from"])
-                        if cell is None or origin is None or _cell_text(slot, cell) is not None:
-                            if cell is not None:
-                                conn.execute(f"DELETE FROM {ISSUES_TABLE} WHERE entry_id=? AND slot_id=?", (entry_id, slot["id"]))
-                            continue
-                        text = _cell_text(by_id[str(rule["from"])], origin)
-                        problem = None
-                        if text is None:
-                            conn.execute(f"DELETE FROM {ISSUES_TABLE} WHERE entry_id=? AND slot_id=?", (entry_id, slot["id"]))
-                            continue
-                        try:
-                            derived = derive_text(rule["read"], rule["value"], text)
-                            if slot["kind"] == "value":
-                                value = json.dumps(_converted(slot, derived))
-                                conn.execute("UPDATE cells SET value=? WHERE entry_id=? AND slot_id=?", (value, entry_id, slot["id"]))
-                                cell["value"] = value
-                            else:
-                                hit = _find_item(catalog, slot, derived)
-                                if hit is None:
-                                    raise ValueError(f"no item '{derived}' in the field's sources")
-                                source = catalog.try_source(hit[0])
-                                fingerprint, label = source.fingerprints([hit[1]], slot["columns"] or None)[hit[1]]
-                                conn.execute("UPDATE cells SET ref_source_id=?, ref_item_id=?, ref_fingerprint=?, ref_label=?"
-                                             " WHERE entry_id=? AND slot_id=?", (hit[0], hit[1], fingerprint, label, entry_id, slot["id"]))
-                                cell.update(ref_source_id=hit[0], ref_item_id=hit[1], ref_label=label)
-                            result["derived"] += 1
-                        except (ValueError, KeyError) as e:
-                            problem = str(e).strip("'\"") if isinstance(e, KeyError) else str(e)
-                        if problem:
-                            conn.execute(f"INSERT INTO {ISSUES_TABLE}(entry_id, slot_id, message) VALUES(?,?,?)"
-                                         " ON CONFLICT(entry_id, slot_id) DO UPDATE SET message=excluded.message",
-                                         (entry_id, slot["id"], problem))
-                            result["flagged"] += 1
-                        else:
-                            conn.execute(f"DELETE FROM {ISSUES_TABLE} WHERE entry_id=? AND slot_id=?", (entry_id, slot["id"]))
+                counts = derive_cells(conn, catalog, by_id, derive, overwrite=overwrite, write=True)
+                for key in ("derived", "flagged", "overwritten"):
+                    result[key] = counts[key]
         dataset.recompute()
     return result
+
+
+def derive_cells(conn, catalog, by_id: dict, derive: list, overwrite: bool, write: bool, examples: int = 0) -> dict:
+    """Runs the derivations over every entry, in `derive` order (each field after the one it reads).
+
+    An empty cell is filled; a failed derivation leaves it empty and flags it. A cell with a value is a **conflict** when
+    the derivation gives something else (a value that differs, a link to another item); with `overwrite` it gets the
+    derived one, otherwise it is kept. A cell with a value whose derivation fails, or gives the same, is kept as it is.
+    Chains follow what the cells hold after each step, so with `overwrite` a field reads its overwritten origin.
+    `write`: False only counts (nothing is changed, the issues table is not touched).
+
+    Returns {derived (cells filled or overwritten), overwritten, flagged, conflicts, examples: [{entry, field, current,
+    derived}] (the first `examples`)}."""
+    out = {"derived": 0, "overwritten": 0, "flagged": 0, "conflicts": 0, "examples": []}
+    cells: dict[int, dict[int, dict]] = {}
+    wanted = {s["id"] for s, _ in derive} | {r["from"] for _, r in derive}
+    for c in conn.execute(f"SELECT * FROM cells WHERE slot_id IN ({','.join('?' * len(wanted))})", sorted(wanted)):
+        cells.setdefault(c["entry_id"], {})[c["slot_id"]] = dict(c)
+
+    def clear_issue_of(entry_id, slot_id):
+        if write:
+            conn.execute(f"DELETE FROM {ISSUES_TABLE} WHERE entry_id=? AND slot_id=?", (entry_id, slot_id))
+
+    for entry_id, row in cells.items():
+        for slot, rule in derive:
+            cell, origin = row.get(slot["id"]), row.get(rule["from"])
+            if cell is None or origin is None:
+                continue
+            current = _cell_text(slot, cell)
+            if current is not None and write and not overwrite:  # filling only: a value stays, no need to derive it
+                clear_issue_of(entry_id, slot["id"])
+                continue
+            text = _cell_text(by_id[str(rule["from"])], origin)
+            if text is None:  # nothing to read: leave the cell as it is
+                clear_issue_of(entry_id, slot["id"])
+                continue
+            try:
+                derived = derive_text(rule["read"], rule["value"], text)
+                if slot["kind"] == "value":
+                    converted = _converted(slot, derived)
+                    value = json.dumps(converted)
+                    shown = ("true" if converted else "false") if isinstance(converted, bool) else str(converted)
+                    same = current is not None and cell["value"] == value
+                else:
+                    hit = _find_item(catalog, slot, derived)
+                    if hit is None:
+                        raise ValueError(f"no item '{derived}' in the field's sources")
+                    shown = derived
+                    same = current is not None and (cell["ref_source_id"], cell["ref_item_id"]) == hit
+            except (ValueError, KeyError) as e:
+                if current is None:  # an empty cell that cannot be filled: flagged
+                    out["flagged"] += 1
+                    if write:
+                        problem = str(e).strip("'\"") if isinstance(e, KeyError) else str(e)
+                        conn.execute(f"INSERT INTO {ISSUES_TABLE}(entry_id, slot_id, message) VALUES(?,?,?)"
+                                     " ON CONFLICT(entry_id, slot_id) DO UPDATE SET message=excluded.message",
+                                     (entry_id, slot["id"], problem))
+                else:
+                    clear_issue_of(entry_id, slot["id"])
+                continue
+            clear_issue_of(entry_id, slot["id"])
+            if current is not None:
+                if same:
+                    continue
+                out["conflicts"] += 1
+                if len(out["examples"]) < examples:
+                    out["examples"].append({"entry": entry_id, "field": _slot_text(slot), "current": current, "derived": shown})
+                if not overwrite:
+                    continue
+                out["overwritten"] += 1
+            out["derived"] += 1
+            # the cell now holds the derived value (in memory too, so chains read it)
+            if slot["kind"] == "value":
+                if write:
+                    conn.execute("UPDATE cells SET value=? WHERE entry_id=? AND slot_id=?", (value, entry_id, slot["id"]))
+                cell["value"] = value
+            else:
+                label = shown
+                if write:
+                    source = catalog.try_source(hit[0])
+                    fingerprint, label = source.fingerprints([hit[1]], slot["columns"] or None)[hit[1]]
+                    conn.execute("UPDATE cells SET ref_source_id=?, ref_item_id=?, ref_fingerprint=?, ref_label=?"
+                                 " WHERE entry_id=? AND slot_id=?", (hit[0], hit[1], fingerprint, label, entry_id, slot["id"]))
+                cell.update(ref_source_id=hit[0], ref_item_id=hit[1], ref_label=label)
+    return out
+
+
+def conflicts(dataset, raw=None, examples: int = 10) -> dict:
+    """What applying the settings (`raw`: unsaved ones from the automation view; None: the saved ones) would change in
+    entries that have values already: {conflicts, examples}. Nothing is changed. Counted as if overwriting, so a chain
+    counts what its overwritten origin would give. Raises WorkbenchError for invalid settings."""
+    with dataset.connect() as conn:
+        slots = dataset.slots(conn)
+        config = normalize(raw, slots) if raw is not None else load(conn, slots)
+    by_id = {str(s["id"]): s for s in slots}
+    rules = config["rules"]
+    derive = [(by_id[k], rules[k]) for k in order(rules, by_id)]
+    if not derive:
+        return {"conflicts": 0, "examples": []}
+    with dataset.connect() as conn:
+        counted = derive_cells(conn, dataset.catalog, by_id, derive, overwrite=True, write=False, examples=examples)
+    return {"conflicts": counted["conflicts"], "examples": counted["examples"]}
 
 
 def preview(dataset, raw: dict, sample: str | None) -> dict:

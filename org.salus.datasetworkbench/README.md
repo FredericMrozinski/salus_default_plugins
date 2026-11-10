@@ -6,7 +6,7 @@ Design: `design/dataset-workbench.md` in the Salus repository.
 | Component | Panel | What it does |
 |---|---|---|
 | `browser` (entry) | left | **Sources** tab: folders, source cohorts: file sources (browse, search, upload), table sources (CSV, columns, issues). A folder without source cohorts in it can become a general source cohort (right-click › *Convert to general source cohort*; its files become items, nothing moves). **Datasets** tab: list, create, delete. |
-| `dataset-viewer` | right | All entries of one dataset (virtual list, search), **Automation**, **Edit schema**, `+ Entry`; the footer counts the entries per state, and clicking a count shows only those. |
+| `dataset-viewer` | right | All entries of one dataset (virtual list, search), **Automation**, **Edit schema**, `+ Entry`; the footer counts the entries per state, and clicking a count shows only those. Several entries can be picked (Ctrl/Cmd+click, Shift+click for a range, Ctrl/Cmd+A for all the list shows, Esc for none); the right-click menu deletes them (confirmed by typing "delete") and, with the automation on, runs it now, which creates the deleted entries again if their source items still match. |
 | `entry-editor` | center | Edits one entry (typed value editors, searchable reference pickers, item states, "Mark as valid"), the dataset schema and its automation. |
 
 Files and tables open in other plugins through `salus.openFile` (the Relational Viewer for CSV/JSON/SQLite, the Image Viewer for slides).
@@ -22,6 +22,15 @@ for the short database update at the end. Uploads, renames and deletes made duri
 not undo or duplicate them); a cohort moved or renamed during its walk is left for the next Refresh. A cohort that is being
 scanned on its own (*Rescan files*) is skipped. Code: `Workbench.scan_all` in `backend/workbench/service.py`, `FileSource.scan` in
 `backend/workbench/sources.py`; tests: `ScanDuringChangesTests` in `backend/tests/test_workbench.py`.
+
+Every SQLite connection is opened and closed under one lock (`workbench/util.py`, a workaround for hangs of conda's SQLite).
+Closing the last connection to a database checkpoints its WAL, which after a large write (a Refresh that recorded many files,
+an automation that created many entries) is slow on a network filesystem and used to hold up every request, so Salus answered
+504. A connection that changed 1000 rows or more now checkpoints itself before closing, outside that lock (`CheckpointTests`
+in `backend/tests/test_util.py`).
+
+**If the backend is slow or hangs:** requests over 5 s are logged ("slow request: GET /… took 12.3 s"), so are slow checkpoints and
+closes; `kill -USR1 <backend pid>` prints the stack of every thread to the backend's stderr.
 
 ## Automation
 
@@ -45,7 +54,13 @@ database (`meta` key `automation`) and so survive restarts and travel with the d
   - A value field gets the text converted to its type (`17` → integer 17). A file or row field links the item the text names in one of its
     sources: a relative path, or a file name without a folder when exactly one file has it; a row key.
   - **Derivations chain**: a field can derive from a derived field (e.g. slide → case id → patient row); the order is worked out, cycles are refused.
-  - Only **empty** cells are filled: a value typed by hand is never overwritten, and later derivations in a chain continue from it.
+  - **Existing values.** The runs on a refresh only fill **empty** cells: a value typed by hand stays, and later derivations in a chain
+    continue from it. When you apply the settings yourself (*Save and apply*, or *Run automation now* in the entries' right-click menu)
+    and some entries already hold a value that differs from what the automation gives, a dialog shows how many, with examples, and
+    asks: **Cancel**, **Fill in missing** (only empty fields; those values stay) or **Overwrite existing** (they get the automation's,
+    and chains continue from the new values). A derivation that fails never touches a value that is there. Backend:
+    `POST /datasets/{id}/automation/conflicts {rules?}` counts without changing anything; `PUT …/automation` and
+    `POST …/automation/run` take `{mode: "fill" | "overwrite"}`.
   - When a derivation fails (no match, empty result, wrong type, no such item, an ambiguous file name) the cell stays empty and is **flagged**:
     state *invalid* with the reason ("automation: …") in the entry editor, so the entry counts as incomplete. The flag goes away once the cell is
     filled, by hand or by a later run (e.g. after the missing mask was uploaded).

@@ -237,19 +237,21 @@ class Workbench:
 
         return self.start_job("check", dataset_id, work)
 
-    def set_automation(self, dataset_id: str, raw) -> dict:
-        """Saves the automation settings and applies them in the background (a job "automation")."""
+    def set_automation(self, dataset_id: str, raw, overwrite: bool = False) -> dict:
+        """Saves the automation settings and applies them in the background (a job "automation"). `overwrite`: derived
+        fields that have a different value already get the derived one ("Overwrite existing"); otherwise only empty
+        fields are filled ("Fill in missing")."""
         dataset = self.datasets.get(dataset_id)
         config = dataset.set_automation(raw)
         self.notify({"type": "dataset_changed", "dataset": dataset.id, "schema": True})
-        self.run_automation(dataset_id)
+        self.run_automation(dataset_id, overwrite)
         return config
 
-    def run_automation(self, dataset_id: str) -> dict:
+    def run_automation(self, dataset_id: str, overwrite: bool = False) -> dict:
         dataset = self.datasets.get(dataset_id)
 
         def work(progress):
-            result = dataset.run_automation()
+            result = dataset.run_automation(overwrite)
             self.notify({"type": "dataset_changed", "dataset": dataset.id})
             return result
 

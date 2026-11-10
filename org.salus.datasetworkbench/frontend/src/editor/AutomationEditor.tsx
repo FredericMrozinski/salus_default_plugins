@@ -1,9 +1,10 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useDebounced } from "../shared/hooks";
 import { api, encode } from "../shared/salus";
 import type { Automation, AutomationPreview, AutomationRule, DatasetDetail, Slot } from "../shared/types";
 import { Icon } from "../shared/icons";
+import { useAutomationApply } from "../shared/automationApply";
 import { ErrorLine } from "../shared/ui";
 
 type Mode = "empty" | "source" | "derive";
@@ -48,13 +49,12 @@ export function AutomationEditor({ dataset, onDone }: { dataset: DatasetDetail; 
     queryFn: () => api<AutomationPreview>("POST", `/datasets/${encode(dataset.id)}/automation/preview`, { json: JSON.parse(request) }),
     placeholderData: (previous) => previous,
   });
-  const save = useMutation({
-    mutationFn: () => api("PUT", `/datasets/${encode(dataset.id)}/automation`, { json: automation }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["dataset", dataset.id] });
-      onDone();
-    },
+  // Save and apply: if existing values would change, a dialog asks first (fill in missing, overwrite existing, cancel).
+  const save = useAutomationApply(dataset.id, () => {
+    queryClient.invalidateQueries({ queryKey: ["dataset", dataset.id] });
+    onDone();
   });
+  const saveAndApply = () => save.start((mode) => api("PUT", `/datasets/${encode(dataset.id)}/automation`, { json: { ...automation, mode } }), automation);
 
   const set = (id: string, change: Partial<Draft>) =>
     setDrafts((all) => {
@@ -78,7 +78,7 @@ export function AutomationEditor({ dataset, onDone }: { dataset: DatasetDetail; 
         <h2 title={dataset.name}>Automation of {dataset.name}</h2>
         <span className="grow" />
         <button onClick={onDone}>Cancel</button>
-        <button className="primary" disabled={save.isPending || !!p?.error} onClick={() => save.mutate()} title="Saves the settings and applies them now; later every refresh applies them">
+        <button className="primary" disabled={save.busy || !!p?.error} onClick={saveAndApply} title="Saves the settings and applies them now; later every refresh applies them">
           Save and apply
         </button>
       </div>
@@ -211,6 +211,7 @@ export function AutomationEditor({ dataset, onDone }: { dataset: DatasetDetail; 
           </div>
 
           <ErrorLine error={save.error ?? preview.error ?? (p?.error ? new Error(p.error) : null)} />
+          {save.dialog}
         </div>
       </div>
     </div>

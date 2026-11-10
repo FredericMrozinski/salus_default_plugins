@@ -611,6 +611,20 @@ class DatasetTests(Base):
     def slot_id(self, name):
         return next(s["id"] for s in self.ds.slots() if s["name"] == name)
 
+    def test_several_entries_are_deleted_at_once_and_ids_follow_the_list(self):
+        self.schema()
+        ids = [self.ds.create_entry()["id"] for _ in range(5)]
+        self.ds.set_cell(ids[1], self.slot_id("question"), {"value": "Tumor here?"})
+        self.ds.set_cell(ids[3], self.slot_id("question"), {"value": "tumor size"})
+        self.assertEqual(self.ds.entry_ids(), ids)
+        self.assertEqual(self.ds.entry_ids(q="tumor"), [ids[1], ids[3]])  # the same search as the list
+        self.assertEqual(self.ds.entry_ids(state="valid"), [])
+        self.assertEqual(self.ds.delete_entries([ids[0], ids[2], 999999]), 2)  # unknown ids are ignored
+        self.assertEqual(self.ds.entry_ids(), [ids[1], ids[3], ids[4]])
+        with self.ds.connect() as conn:  # the cells went with them
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM cells WHERE entry_id IN (?,?)", (ids[0], ids[2])).fetchone()[0], 0)
+        self.assertEqual(self.ds.summary()["entries"], 3)
+
     def test_new_entry_is_incomplete_and_filling_it_makes_it_valid(self):
         self.schema()
         entry = self.ds.create_entry()

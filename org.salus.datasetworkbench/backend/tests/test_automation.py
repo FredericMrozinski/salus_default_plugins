@@ -88,7 +88,7 @@ class Base(unittest.TestCase):
             entry = self.ds.get_entry(row["id"])
             cells = {c["name"]: c for c in entry["cells"]}
             out.append({name: (c["ref"]["label"] if c["ref"] else c["value"]) for name, c in cells.items()} |
-                       {"_state": entry["state"], "_cells": cells})
+                       {"_state": entry["state"], "_cells": cells, "_id": row["id"]})
         return sorted(out, key=lambda e: e["slide"] or "")
 
 
@@ -200,6 +200,62 @@ class RunTests(Base):
         self.ds.set_automation(self.rules(patient={"mode": "source", "filter": "2$"}))
         self.wb.check_dataset(self.ds.id)
         self.assertEqual([e["patient"] for e in self.entries()], ["P2"])
+
+    def test_existing_values_that_differ_are_conflicts_kept_by_fill_and_replaced_by_overwrite(self):
+        from workbench.automation import conflicts
+        self.add_slide("P1_01.svs")
+        self.add_slide("P2_02.svs")
+        self.wb.set_automation(self.ds.id, self.standard())
+        self.wb.scan_all()
+        first, second = self.entries()
+        self.assertEqual(first["case"], "P1-01")
+        # the user changed two values by hand; P2's case still matches what the automation gives
+        self.ds.set_cell(first["_id"], self.slot["case"], {"value": "P9-99"})
+        self.ds.set_cell(first["_id"], self.slot["number"], {"value": 7})
+        found = conflicts(self.ds)
+        # case and number differ; patient derives from case, so overwriting case changes nothing there (P1 either way)
+        self.assertEqual(found["conflicts"], 2)
+        self.assertEqual(sorted((e["field"], e["current"], e["derived"]) for e in found["examples"]),
+                         [("case", "P9-99", "P1-01"), ("number", "7", "1")])
+        self.assertEqual(self.entries()[0]["case"], "P9-99")  # counting changed nothing
+
+        self.wb.run_automation(self.ds.id)  # "Fill in missing": the values stay
+        self.assertEqual((self.entries()[0]["case"], self.entries()[0]["number"]), ("P9-99", 7))
+
+        self.wb.run_automation(self.ds.id, overwrite=True)  # "Overwrite existing"
+        first = self.entries()[0]
+        self.assertEqual((first["case"], first["number"], first["patient"]), ("P1-01", 1, "P1"))
+        self.assertEqual(conflicts(self.ds)["conflicts"], 0)
+
+    def test_overwriting_follows_a_chain_and_conflicts_check_unsaved_settings(self):
+        from workbench.automation import conflicts
+        self.add_slide("P1_01.svs")
+        self.wb.set_automation(self.ds.id, self.standard())
+        self.wb.scan_all()
+        entry = self.entries()[0]
+        self.assertEqual(entry["patient"], "P1")
+        # new settings: case becomes "P1-x"; patient derives from case and still gives P1, so only case conflicts
+        rules = self.standard()
+        rules["rules"][str(self.slot["case"])] = {"mode": "derive", "from": self.slot["slide"], "read": r"P(\d+)_", "value": r"P\1-x"}
+        found = conflicts(self.ds, rules)
+        self.assertEqual(found["conflicts"], 1)
+        self.assertEqual(found["examples"][0]["derived"], "P1-x")
+        with self.assertRaises(WorkbenchError):
+            conflicts(self.ds, self.rules(case={"mode": "derive", "from": self.slot["slide"], "read": "(", "value": "x"}))
+        self.wb.set_automation(self.ds.id, rules, overwrite=True)
+        self.assertEqual(self.entries()[0]["case"], "P1-x")
+
+    def test_deleted_entries_come_back_when_the_automation_runs_again(self):
+        self.add_slide("P1_01.svs")
+        self.add_slide("P2_02.svs")
+        self.wb.set_automation(self.ds.id, self.standard())
+        self.wb.scan_all()
+        ids = self.ds.entry_ids()
+        self.assertEqual(len(ids), 2)
+        self.assertEqual(self.ds.delete_entries(ids), 2)
+        self.assertEqual(self.ds.summary()["entries"], 0)
+        self.wb.run_automation(self.ds.id)  # "Run automation now" in the entries' right-click menu
+        self.assertEqual(sorted((e["slide"], e["case"]) for e in self.entries()), [("P1_01.svs", "P1-01"), ("P2_02.svs", "P2-02")])
 
     def test_rows_of_a_table_can_be_the_source(self):
         self.ds.set_automation(self.rules(patient={"mode": "source"},

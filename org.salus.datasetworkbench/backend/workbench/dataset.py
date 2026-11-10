@@ -378,8 +378,8 @@ class Dataset:
                 automation.save(conn, config)
         return config
 
-    def run_automation(self) -> dict:
-        return automation.run(self)
+    def run_automation(self, overwrite: bool = False) -> dict:
+        return automation.run(self, overwrite)
 
     def automation_sources(self) -> set[str]:
         """The sources whose refresh can change what the automation does (the source field and the derived ref fields)."""
@@ -437,7 +437,23 @@ class Dataset:
         return {"id": entry["id"], "state": entry["state"], "created_at": entry["created_at"],
                 "updated_at": entry["updated_at"], "cells": out}
 
-    def list_entries(self, limit: int = 50, offset: int = 0, state: str | None = None, q: str = "") -> dict:
+    def delete_entries(self, entry_ids) -> int:
+        """Deletes several entries at once (their cells go with them). Returns how many there were; unknown ids are ignored."""
+        ids = sorted({int(i) for i in entry_ids})
+        deleted = 0
+        with self.lock, self.connect() as conn, Tx(conn):
+            for batch in chunks(ids):
+                deleted += conn.execute(f"DELETE FROM entries WHERE id IN ({','.join('?' * len(batch))})", batch).rowcount
+        return deleted
+
+    def entry_ids(self, state: str | None = None, q: str = "") -> list[int]:
+        """The ids of every entry the list shows for this filter and search, in its order (select all, select a range)."""
+        clause, args = self._entry_filter(state, q)
+        with self.connect() as conn:
+            return [r[0] for r in conn.execute(f"SELECT e.id FROM entries e{clause} ORDER BY e.id", args)]
+
+    @staticmethod
+    def _entry_filter(state: str | None, q: str) -> tuple[str, list]:
         where, args = [], []
         if state:
             where.append("e.state=?")
@@ -445,7 +461,10 @@ class Dataset:
         if q.strip():
             where.append("EXISTS (SELECT 1 FROM cells c WHERE c.entry_id=e.id AND (c.value LIKE ? ESCAPE '\\' OR c.ref_label LIKE ? ESCAPE '\\'))")
             args += [f"%{like_escape(q.strip())}%"] * 2
-        clause = (" WHERE " + " AND ".join(where)) if where else ""
+        return (" WHERE " + " AND ".join(where)) if where else "", args
+
+    def list_entries(self, limit: int = 50, offset: int = 0, state: str | None = None, q: str = "") -> dict:
+        clause, args = self._entry_filter(state, q)
         with self.connect() as conn:
             total = conn.execute(f"SELECT COUNT(*) FROM entries e{clause}", args).fetchone()[0]
             rows = conn.execute(f"SELECT e.id, e.state FROM entries e{clause} ORDER BY e.id LIMIT ? OFFSET ?",
