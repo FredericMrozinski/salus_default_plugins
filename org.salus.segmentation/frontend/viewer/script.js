@@ -1,7 +1,7 @@
 // The annotation pane (center): the image in OpenSeadragon, and a canvas on top that draws the annotations and the
 // shape being drawn. Tools and classes are shared state (chosen in the tools and class panels); the drawn shapes go to the
 // backend, which keeps them as GeoJSON in image pixel coordinates.
-import { api, fileName, followState, h, message as errorText, modal, onEvent, salus, setState } from "../shared/common.js";
+import { api, fileName, followState, h, message as errorText, modal, newId, onEvent, salus, setState } from "../shared/common.js";
 import { Payload } from "../shared/salus_sdk.js";
 import { createViewer, zoomPercent } from "../shared/osd.js";
 
@@ -502,7 +502,7 @@ container.addEventListener("pointerdown", (event) => {
   } else if (isSmartBrush(tool)) {
     if (smart) return setHint(smart.polygon ? "Wait until the smart polygon is done." : ""); // the previous stroke is still being saved
     press = { ...p, tool, moved: true, id: event.pointerId, pen };
-    smart = { id: crypto.randomUUID(), mode: paintMode, method: state.mode, dabs: [], pending: toImage(p.x, p.y), busy: false, ended: false, scale: transform().s, inner: radius() };
+    smart = { id: newId(), mode: paintMode, method: state.mode, dabs: [], pending: toImage(p.x, p.y), busy: false, ended: false, scale: transform().s, inner: radius() };
     startSmart(smart);
   } else {
     press = { ...p, tool, moved: true, id: event.pointerId, pen };
@@ -759,7 +759,7 @@ async function pumpSmart() {
 // A smart polygon: the backend places the dabs along the outline and returns them in batches of about a second;
 // the viewer asks until none remain, showing each batch, then commits the polygon with its dabs.
 async function smartPolygon(points, scale, inner) {
-  const current = smart = { id: crypto.randomUUID(), mode: "paint", method: state.mode, dabs: [], pending: null, busy: true, ended: true, scale, inner, polygon: points };
+  const current = smart = { id: newId(), mode: "paint", method: state.mode, dabs: [], pending: null, busy: true, ended: true, scale, inner, polygon: points };
   setHint("Smart polygon: following the outline…");
   redraw();
   try {

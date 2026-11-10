@@ -1,15 +1,56 @@
 // Shared by the slide and image viewers: an OpenSeadragon viewer for a Deep Zoom image that the backend serves tile by tile.
 // The page loads vendor/openseadragon.min.js first, which defines the global OpenSeadragon.
 
-// OpenSeadragon's own zoom, home and full-page buttons. Their default images are files, so these are inline SVGs and the
-// plugin needs no extra files. prefixUrl is empty because the images are complete data: URLs.
-function icon(paths, opacity) {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28">` +
-    `<rect x="1" y="1" width="26" height="26" rx="5" fill="#1b1e25" fill-opacity="0.75" stroke="#fff" stroke-opacity="${opacity}"/>` +
-    `<g stroke="#fff" stroke-opacity="${opacity + 0.2}" stroke-width="2" stroke-linecap="round" fill="none">${paths}</g></svg>`;
-  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+// The zoom, home and full-page buttons are ordinary <button>s, so they get the theme's raised button look in light and
+// dark mode; OpenSeadragon's own buttons are images and can't follow the theme. The icons draw in currentColor.
+const ICONS = {
+  zoomIn: '<path d="M12 6v12M6 12h12"/>',
+  zoomOut: '<path d="M6 12h12"/>',
+  home: '<path d="M5 12l7-6 7 6M7 11v7h10v-7"/>',
+  fullpage: '<path d="M6 10V6h4M14 6h4v4M18 14v4h-4M10 18H6v-4"/>',
+};
+
+const STYLE = `
+/* OpenSeadragon sets display: inline-block on the control itself, so the row is an inner element */
+.osd-controls-row { display: flex; gap: 6px; margin: 8px; }
+.osd-controls button { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; color: var(--salus-fg, #ddd); }
+.osd-controls svg { width: 18px; height: 18px; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round;
+  stroke-linejoin: round; fill: none; }
+`;
+
+function addStyle() {
+  if (document.getElementById("osd-controls-style")) return;
+  const style = document.createElement("style");
+  style.id = "osd-controls-style";
+  style.textContent = STYLE;
+  document.head.append(style);
 }
-const buttons = (paths) => ({ REST: icon(paths, 0.5), GROUP: icon(paths, 0.5), HOVER: icon(paths, 0.9), DOWN: icon(paths, 1) });
+
+function addControls(viewer) {
+  addStyle();
+  const box = document.createElement("div");
+  box.className = "osd-controls";
+  const row = document.createElement("div");
+  row.className = "osd-controls-row";
+  box.append(row);
+  const zoom = (factor) => { viewer.viewport.zoomBy(factor); viewer.viewport.applyConstraints(); };
+  const items = [
+    ["zoomIn", "Zoom in", () => zoom(viewer.zoomPerClick)],
+    ["zoomOut", "Zoom out", () => zoom(1 / viewer.zoomPerClick)],
+    ["home", "Fit to view", () => viewer.viewport.goHome()],
+    ["fullpage", "Full screen", () => viewer.setFullScreen(!viewer.isFullPage())],
+  ];
+  for (const [key, label, run] of items) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.title = label;
+    button.setAttribute("aria-label", label);
+    button.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[key]}</svg>`;
+    button.addEventListener("click", run);
+    row.append(button);
+  }
+  viewer.addControl(box, { anchor: OpenSeadragon.ControlAnchor.TOP_LEFT });
+}
 
 /**
  * @param {HTMLElement} element
@@ -17,17 +58,10 @@ const buttons = (paths) => ({ REST: icon(paths, 0.5), GROUP: icon(paths, 0.5), H
  * @param {object} [options]  more OpenSeadragon options
  */
 export function createViewer(element, image, options = {}) {
-  return OpenSeadragon({
+  const viewer = OpenSeadragon({
     element,
     tileSources: { Image: { xmlns: "http://schemas.microsoft.com/deepzoom/2008", ...image } },
-    showNavigationControl: true,
-    prefixUrl: "",
-    navImages: {
-      zoomIn: buttons('<path d="M14 8v12M8 14h12"/>'),
-      zoomOut: buttons('<path d="M8 14h12"/>'),
-      home: buttons('<path d="M7 14l7-6 7 6M9 13v7h10v-7"/>'),
-      fullpage: buttons('<path d="M8 12V8h4M16 8h4v4M20 16v4h-4M12 20H8v-4"/>'),
-    },
+    showNavigationControl: false, // replaced by addControls
     showNavigator: true,
     navigatorPosition: "TOP_RIGHT",
     navigatorSizeRatio: 0.18,
@@ -40,6 +74,8 @@ export function createViewer(element, image, options = {}) {
     gestureSettingsMouse: { clickToZoom: false },
     ...options,
   });
+  if (options.showNavigationControl !== true) addControls(viewer);
+  return viewer;
 }
 
 /** Image pixels per screen pixel, as a percentage: 100% shows the image at its real size. */
