@@ -15,11 +15,13 @@ const PATHS = {
   delete: "M304.62-160q-26.85 0-45.74-18.88Q240-197.77 240-224.62V-720h-40v-40h160v-30.77h240V-760h160v40h-40v495.38q0 27.62-18.5 46.12Q683-160 655.38-160H304.62ZM680-720H280v495.38q0 10.77 6.92 17.7 6.93 6.92 17.7 6.92h350.76q9.24 0 16.93-7.69 7.69-7.69 7.69-16.93V-720ZM392.31-280h40v-360h-40v360Zm135.38 0h40v-360h-40v360ZM280-720v520-520Z",
   // bolt_24dp_1F1F1F_FILL0_wght200_GRAD0_opsz24.svg: drawn on a 24 unit grid (VIEW_BOX below)
   bolt: "M10.55,18.2L15.73,12h-4l0.72-5.68L7.83,13H11.3l-0.75,5.2Zm-1.4,2.68l1-6.88H5.9L13.38,3.21h0.46L12.87,11h5L9.62,20.88H9.15Zm2.62-8.63Z",
+  // edit_24dp_1F1F1F_FILL0_wght200_GRAD0_opsz24.svg, the pen the segmentation plugin uses for renaming a class
+  pen: "M5,19H6.1L16.8,8.3L15.7,7.2L5,17.9V19ZM4,20V17.48L17.18,4.29q0.15-0.14 0.34-0.21T17.91,4T18.3,4.06t0.35,0.23l1.07,1.07q0.17,0.16 0.23,0.35T20,6.1q0,0.2-0.07,0.39T19.71,6.83L6.52,20H4ZM19.02,6.09L17.91,4.98l1.11,1.11ZM16.24,7.76L15.7,7.2l1.1,1.1L16.24,7.76Z",
 } as const;
 
 export type IconName = keyof typeof PATHS;
 
-const VIEW_BOX: Partial<Record<IconName, string>> = { bolt: "0 0 24 24" };
+const VIEW_BOX: Partial<Record<IconName, string>> = { bolt: "0 0 24 24", pen: "0 0 24 24" };
 
 export function Icon({ name, size = 20, title, ...rest }: { name: IconName; size?: number; title?: string } & Omit<SVGProps<SVGSVGElement>, "name">) {
   return (

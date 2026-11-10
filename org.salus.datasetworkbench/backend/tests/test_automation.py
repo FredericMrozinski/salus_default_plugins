@@ -118,6 +118,14 @@ class SettingsTests(Base):
         with self.assertRaisesRegex(WorkbenchError, "itself"):
             self.ds.set_automation(self.rules(case=derive("case")))
 
+    def test_the_source_filter_is_stored_and_a_bad_one_is_refused(self):
+        self.ds.set_automation(self.rules(slide={"mode": "source", "filter": r"^P\d+_"}))
+        self.assertEqual(self.ds.automation()["rules"][str(self.slot["slide"])], {"mode": "source", "filter": r"^P\d+_"})
+        self.ds.set_automation(self.rules(slide={"mode": "source", "filter": ""}))  # empty: every item
+        self.assertEqual(self.ds.automation()["rules"][str(self.slot["slide"])], {"mode": "source"})
+        with self.assertRaisesRegex(WorkbenchError, "invalid filter"):
+            self.ds.set_automation(self.rules(slide={"mode": "source", "filter": "("}))
+
     def test_rules_of_deleted_fields_are_dropped(self):
         self.ds.set_automation(self.standard())
         schema = [s for s in self.ds.slots() if s["name"] != "case"]
@@ -167,6 +175,31 @@ class RunTests(Base):
         self.wb.uploads.append(info["upload_id"], 0, data)
         self.wb.finish_upload(info["upload_id"])
         self.wb.scan_all()
+
+    def test_the_source_filter_decides_which_items_become_entries(self):
+        self.add_slide("P1_01.svs")
+        self.add_slide("sub/P2_02.svs")
+        self.add_slide("control/C1_01.svs")
+        rules = self.standard()
+        rules["rules"][str(self.slot["slide"])]["filter"] = r"(^|/)P\d+_"  # searched in the relative path
+        self.wb.set_automation(self.ds.id, rules)
+        self.wb.scan_all()
+        self.assertEqual([e["slide"] for e in self.entries()], ["P1_01.svs", "sub/P2_02.svs"])
+
+        # a narrower filter keeps the entries that exist; a wider one adds what it now lets through
+        rules["rules"][str(self.slot["slide"])]["filter"] = r"^sub/"
+        self.wb.set_automation(self.ds.id, rules)
+        self.wb.scan_all()
+        self.assertEqual(self.ds.summary()["entries"], 2)
+        rules["rules"][str(self.slot["slide"])]["filter"] = r"^control/"
+        self.wb.set_automation(self.ds.id, rules)
+        self.wb.scan_all()
+        self.assertEqual([e["slide"] for e in self.entries()], ["P1_01.svs", "control/C1_01.svs", "sub/P2_02.svs"])
+
+    def test_the_source_filter_works_on_row_keys(self):
+        self.ds.set_automation(self.rules(patient={"mode": "source", "filter": "2$"}))
+        self.wb.check_dataset(self.ds.id)
+        self.assertEqual([e["patient"] for e in self.entries()], ["P2"])
 
     def test_rows_of_a_table_can_be_the_source(self):
         self.ds.set_automation(self.rules(patient={"mode": "source"},
@@ -237,6 +270,31 @@ class PreviewTests(Base):
         self.assertIn("does not match", results_of(out, self.slot["case"])["error"])
         self.assertEqual(self.ds.automation(), {"rules": {}})
         self.assertEqual(self.ds.summary()["entries"], 0)
+
+
+class FilterPreviewTests(Base):
+    def test_preview_counts_what_the_filter_lets_through_and_samples_only_those(self):
+        from workbench.automation import preview
+        for rel in ("P1_01.svs", "P2_02.svs", "control/C1_01.svs"):
+            self.add_slide(rel)
+        self.slides.scan()
+        rules = self.standard()
+        rules["rules"][str(self.slot["slide"])]["filter"] = r"^P"
+        out = preview(self.ds, rules, None)
+        self.assertEqual(out["samples"], ["P1_01.svs", "P2_02.svs"])
+        self.assertEqual(out["sample"], "P1_01.svs")
+        self.assertEqual(out["filter"], {"matching": 2, "total": 3, "skipped": ["control/C1_01.svs"], "error": None})
+        self.assertIsNone(out["error"])
+
+        rules["rules"][str(self.slot["slide"])]["filter"] = "("
+        out = preview(self.ds, rules, None)
+        self.assertIn("invalid filter", out["filter"]["error"])
+        self.assertIn("invalid filter", out["error"])  # so the dialog cannot save it
+        self.assertEqual(self.ds.summary()["entries"], 0)
+
+        del rules["rules"][str(self.slot["slide"])]["filter"]
+        out = preview(self.ds, rules, None)
+        self.assertEqual((out["filter"]["matching"], out["filter"]["total"]), (3, 3))
 
 
 def results_of(out, slot_id):

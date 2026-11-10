@@ -69,7 +69,8 @@ export type DatasetSummary = {
   slots: number;
   error?: string;
 };
-export type AutomationRule = { mode: "source" } | { mode: "derive"; from: number; read: string; value: string };
+/** `filter`: only source items whose path (or row key) the regex finds become entries. */
+export type AutomationRule = { mode: "source"; filter?: string } | { mode: "derive"; from: number; read: string; value: string };
 /** Keyed by slot id; a slot without a rule is left empty. */
 export type Automation = { rules: Record<string, AutomationRule> };
 export type AutomationPreview = {
@@ -77,6 +78,8 @@ export type AutomationPreview = {
   sample: string;
   error: string | null;
   results: Record<string, { text: string | null; error: string | null; note: string | null }>;
+  /** With a source field: how many of its items the filter lets through, a few it leaves out. */
+  filter: { matching: number; total: number; skipped: string[]; error: string | null } | null;
 };
 export type DatasetDetail = DatasetSummary & { schema: Slot[]; automation?: Automation };
 
@@ -106,7 +109,8 @@ export type Stats = {
 export type Nav =
   | { type: "open_dataset"; dataset: string }
   | { type: "show_entry"; dataset: string; entry: number }
-  | { type: "edit_schema"; dataset: string };
+  | { type: "edit_schema"; dataset: string }
+  | { type: "edit_automation"; dataset: string };
 
 export type WorkbenchEvent =
   | { type: "tree_changed" }

@@ -5,7 +5,6 @@ import { api, encode, initialNav, navigate, onEvent, onNav, setState } from "../
 import type { DatasetDetail, EntryPage, EntryRow, EntryState, Nav, Stats } from "../shared/types";
 import { Icon } from "../shared/icons";
 import { Badge, Empty, ErrorLine } from "../shared/ui";
-import { AutomationDialog } from "./AutomationDialog";
 
 const ROW = 46;
 const PAGE = 50;
@@ -18,7 +17,7 @@ export function App() {
     const apply = (nav: Nav) => {
       if (nav.type === "open_dataset") (setDataset(nav.dataset), setSelected(null));
       else if (nav.type === "show_entry") (setDataset(nav.dataset), setSelected(nav.entry));
-      else if (nav.type === "edit_schema") setDataset(nav.dataset);
+      else if (nav.type === "edit_schema" || nav.type === "edit_automation") setDataset(nav.dataset);
     };
     const initial = initialNav();
     if (initial) apply(initial);
@@ -38,7 +37,6 @@ function Viewer({ dataset, selected, onSelect }: { dataset: string; selected: nu
   const detail = useQuery({ queryKey: ["dataset", dataset], queryFn: () => api<DatasetDetail>("GET", `/datasets/${encode(dataset)}`) });
   const [filter, setFilter] = useState<EntryState | "">("");
   const [search, setSearch] = useState("");
-  const [automating, setAutomating] = useState(false);
   const q = useDebounced(search, 250);
 
   // Opening a dataset re-checks its references in the background; the results arrive as events.
@@ -66,35 +64,32 @@ function Viewer({ dataset, selected, onSelect }: { dataset: string; selected: nu
   const automated = Object.keys(detail.data?.automation?.rules ?? {}).length > 0;
   return (
     <div className="app">
-      <div className="toolbar">
+      {/* Header, stacked: the dataset's name, then Automation and Edit schema side by side, then + Entry across the width. */}
+      <div className="toolbar viewer-head">
         <h2 title={detail.data?.name}>{detail.data?.name ?? dataset}</h2>
-        <button className="small" title="Change the fields of every entry" onClick={() => navigate("entry-editor", { type: "edit_schema", dataset })}>
-          Edit schema
-        </button>
-        <button
-          className={`small ${automated ? "automation-on" : ""}`}
-          disabled={!detail.data || schema.length === 0}
-          title={schema.length === 0 ? "Define the schema first" : automated ? "Automation is on: entries are created and filled on every refresh" : "Create and fill entries automatically"}
-          onClick={() => setAutomating(true)}
-        >
-          <Icon name="bolt" size={16} />
-          Automation
-        </button>
+        <div className="viewer-head-row">
+          <button
+            className={`small ${automated ? "automation-on" : ""}`}
+            disabled={!detail.data || schema.length === 0}
+            title={schema.length === 0 ? "Define the schema first" : automated ? "Automation is on: entries are created and filled on every refresh" : "Create and fill entries automatically"}
+            onClick={() => navigate("entry-editor", { type: "edit_automation", dataset })}
+          >
+            <Icon name="bolt" size={16} />
+            Automation
+          </button>
+          <button className="small" title="Change the fields of every entry" onClick={() => navigate("entry-editor", { type: "edit_schema", dataset })}>
+            <Icon name="pen" size={16} />
+            Edit schema
+          </button>
+        </div>
         <button className="small primary" disabled={add.isPending || schema.length === 0} title={schema.length === 0 ? "Define the schema first" : "Add an entry"} onClick={() => add.mutate()}>
-          + Entry
+          <Icon name="add" size={22} /> Entry
         </button>
       </div>
       <div className="toolbar">
         <input className="grow" placeholder="Search entries…" value={search} onChange={(e) => setSearch(e.target.value)} />
-        <select value={filter} onChange={(e) => setFilter(e.target.value as EntryState | "")}>
-          <option value="">All</option>
-          <option value="valid">Valid</option>
-          <option value="incomplete">Incomplete</option>
-          <option value="corrupted">Corrupted</option>
-        </select>
       </div>
       <ErrorLine error={detail.error ?? add.error} />
-      {automating && detail.data && <AutomationDialog dataset={detail.data} onClose={() => setAutomating(false)} />}
       {detail.data && schema.length === 0 && <Empty>This dataset has no fields yet. Use “Edit schema”.</Empty>}
       <EntryList dataset={dataset} slots={schema.map((s) => String(s.id))} filter={filter} q={q} selected={selected} onSelect={open} />
       <StatsFooter dataset={dataset} filter={filter} onFilter={setFilter} />
@@ -172,7 +167,6 @@ function EntryLine({ row, slots }: { row: EntryRow; slots: string[] }) {
 
 function StatsFooter({ dataset, filter, onFilter }: { dataset: string; filter: string; onFilter: (s: EntryState | "") => void }) {
   const stats = useQuery({ queryKey: ["stats", dataset], queryFn: () => api<Stats>("GET", `/datasets/${encode(dataset)}/stats`) });
-  const [open, setOpen] = useState(false);
   const s = stats.data;
   if (!s) return <div className="footer faint">{stats.error ? "Statistics unavailable" : "…"}</div>;
   const chip = (state: EntryState, label: string) => (
@@ -180,7 +174,6 @@ function StatsFooter({ dataset, filter, onFilter }: { dataset: string; filter: s
       {s.states[state]} {label}
     </button>
   );
-  const problems = s.items.source_missing + s.items.source_changed + s.items.invalid;
   return (
     <div className="footer">
       <div className="stats-line">
@@ -188,31 +181,7 @@ function StatsFooter({ dataset, filter, onFilter }: { dataset: string; filter: s
         {chip("valid", "valid")}
         {chip("incomplete", "incomplete")}
         {chip("corrupted", "corrupted")}
-        <span className="grow" />
-        <button className="small" onClick={() => setOpen(!open)}>
-          {open ? "Hide details" : "Details"}
-        </button>
       </div>
-      {open && (
-        <div className="stats-detail">
-          {s.slots.map((slot) => (
-            <div key={slot.slot} className="slot-stat">
-              <span className="slot-name" title={slot.name}>
-                {slot.label}
-                {slot.required && " *"}
-              </span>
-              <progress value={slot.filled} max={Math.max(s.entries, 1)} />
-              <span className="faint">
-                {slot.filled}/{s.entries}
-              </span>
-              {slot.states.source_missing > 0 && <Badge state="source_missing">{slot.states.source_missing} missing</Badge>}
-              {slot.states.source_changed > 0 && <Badge state="source_changed">{slot.states.source_changed} changed</Badge>}
-              {slot.states.invalid > 0 && <Badge state="invalid">{slot.states.invalid} invalid</Badge>}
-            </div>
-          ))}
-          <div className="faint">{problems === 0 ? "No problems with the items." : `${problems} item(s) need attention.`}</div>
-        </div>
-      )}
     </div>
   );
 }
