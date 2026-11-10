@@ -17,6 +17,7 @@ body { overflow: hidden; }
 .tab.active { color: var(--salus-fg); border-bottom-color: var(--salus-accent); }
 
 button.danger { color: var(--salus-danger); border-color: var(--salus-danger); }
+button.primary.danger { color: #fff; } /* filled red (the theme's primary danger): white text */
 .icon-button { padding: 0 6px; min-width: 22px; height: 22px; line-height: 1; background: none; border-color: transparent; color: var(--salus-fg-muted); }
 .icon-button:hover:not(:disabled) { color: var(--salus-fg); background: var(--salus-depth-foreground-2); }
 .small { font-size: 12px; padding: 1px 8px; }

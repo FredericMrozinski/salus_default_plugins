@@ -650,17 +650,26 @@ class DatasetTests(Base):
         entry = self.fill()
         time.sleep(0.01)
         write(self.files.path / "a.svs", b"changed!")
-        self.wb.source_changed(self.files.id)
+        self.wb.scan_source(self.files.id)  # Refresh: the scan records the new size/mtime, the entry follows
         entry = self.ds.get_entry(entry["id"])
         self.assertEqual(entry["state"], "corrupted")
         self.assertEqual(self.cell(entry, "slide")["state"], "source_changed")
         entry = self.ds.mark_valid(entry["id"], self.slot_id("slide"))
         self.assertEqual(entry["state"], "valid")
 
+    def test_opening_the_dataset_checks_the_files_themselves(self):
+        entry = self.fill()
+        time.sleep(0.01)
+        write(self.files.path / "a.svs", b"changed without a scan")
+        self.wb.source_changed(self.files.id)  # from the index: it does not know yet
+        self.assertEqual(self.ds.get_entry(entry["id"])["state"], "valid")
+        self.wb.check_dataset(self.ds.id)  # what opening the dataset runs: looks at the files
+        self.assertEqual(self.ds.get_entry(entry["id"])["state"], "corrupted")
+
     def test_deleted_file_is_missing_and_mark_valid_clears_the_reference(self):
         entry = self.fill()
         (self.files.path / "a.svs").unlink()
-        self.wb.source_changed(self.files.id)
+        self.wb.scan_source(self.files.id)
         entry = self.ds.get_entry(entry["id"])
         self.assertEqual(self.cell(entry, "slide")["state"], "source_missing")
         entry = self.ds.mark_valid(entry["id"], self.slot_id("slide"))

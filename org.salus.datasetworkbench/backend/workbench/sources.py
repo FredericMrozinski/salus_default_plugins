@@ -183,8 +183,10 @@ class Source:
     def info(self) -> dict:
         raise NotImplementedError
 
-    def fingerprints(self, item_ids, columns=None) -> dict:
-        """{item id: (fingerprint, label)} for the items that currently exist."""
+    def fingerprints(self, item_ids, columns=None, from_index: bool = False) -> dict:
+        """{item id: (fingerprint, label)} for the items that currently exist. `from_index`: from what the last scan
+        recorded instead of looking at the files again (right after a scan that is the same, and on a slow disk much
+        cheaper); sources whose fingerprints come from their database anyway ignore it."""
         raise NotImplementedError
 
     def search(self, q: str, limit: int, offset: int, **options) -> list[dict]:
@@ -418,11 +420,16 @@ class FileSource(Source):
                             for f in folders] if offset == 0 else [],
                 "files": [self._row_to_item(r) for r in files], "more": len(files) == limit}
 
-    def fingerprints(self, item_ids, columns=None) -> dict:
+    def fingerprints(self, item_ids, columns=None, from_index: bool = False) -> dict:
         found = {}
         with self.connect() as conn:
-            for ids in chunks(item_ids):
-                rows = conn.execute(f"SELECT id, rel_path FROM items WHERE id IN ({','.join('?' * len(ids))})", ids)
+            for ids in chunks(list(item_ids)):
+                marks = ",".join("?" * len(ids))
+                if from_index:
+                    for r in conn.execute(f"SELECT id, rel_path, size, mtime_ns FROM items WHERE id IN ({marks}) AND status!='missing'", ids):
+                        found[r["id"]] = (f"{r['size']}:{r['mtime_ns']}", r["rel_path"])  # = file_fingerprint at the last scan
+                    continue
+                rows = conn.execute(f"SELECT id, rel_path FROM items WHERE id IN ({marks})", ids)
                 for r in rows:
                     try:
                         st = (self.path / r["rel_path"]).stat()
@@ -840,7 +847,7 @@ class TableSource(Source):
         declared = {c["name"] for c in self.declared_columns()}
         return [c for c in columns if c not in declared]
 
-    def fingerprints(self, item_ids, columns=None) -> dict:
+    def fingerprints(self, item_ids, columns=None, from_index: bool = False) -> dict:
         cols = self._columns_for(columns)
         found = {}
         if not cols or not self._has_data():

@@ -13,7 +13,7 @@ Files and tables open in other plugins through `salus.openFile` (the Relational 
 
 ## Refresh
 
-**Refresh** (Sources tab) reads every source cohort again: file cohorts are scanned for new, moved, changed and gone files, table
+**Refresh** (the same button and progress bar in the Sources and the Datasets tab) reads every source cohort again: file cohorts are scanned for new, moved, changed and gone files, table
 cohorts read their CSV again; then the datasets that use them are updated and their automation runs. It is one background job
 (`refresh`, `POST /scan`) that reads the cohorts **one after the other**, not all at once, so on a large or remote filesystem the walks
 do not compete. A bar under the toolbar shows which cohort it is reading ("2 of 5: Whole Slide Images") and how many files it has
@@ -28,6 +28,11 @@ Closing the last connection to a database checkpoints its WAL, which after a lar
 an automation that created many entries) is slow on a network filesystem and used to hold up every request, so Salus answered
 504. A connection that changed 1000 rows or more now checkpoints itself before closing, outside that lock (`CheckpointTests`
 in `backend/tests/test_util.py`).
+
+After a scan the datasets are updated from the cohort's index (the sizes and dates the scan has just recorded), not by
+looking at every referenced file again, and the automation re-evaluates only the entries it created or changed: on a slow
+disk, reading everything a second time kept the backend busy long after a Refresh. Opening a dataset still checks its files
+themselves (`POST /datasets/{id}/check`). SQLite runs with `synchronous=NORMAL` (safe in WAL mode; saves an fsync per commit).
 
 **If the backend is slow or hangs:** requests over 5 s are logged ("slow request: GET /… took 12.3 s"), so are slow checkpoints and
 closes; `kill -USR1 <backend pid>` prints the stack of every thread to the backend's stderr.

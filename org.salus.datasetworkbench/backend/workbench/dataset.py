@@ -603,8 +603,10 @@ class Dataset:
         return out[:limit]
 
     # -- state computation
-    def recompute(self, entry_ids=None, slot_ids=None, source_id=None) -> int:
-        """Re-evaluates cells (all, or by entry, slot or referenced source). Returns the number of changed cells."""
+    def recompute(self, entry_ids=None, slot_ids=None, source_id=None, from_index: bool = False) -> int:
+        """Re-evaluates cells (all, or by entry, slot or referenced source). Returns the number of changed cells.
+        `from_index`: the referenced files' fingerprints come from what their sources' last scan recorded instead of the
+        files themselves (after a scan; see Source.fingerprints)."""
         with self.lock:
             with self.connect() as conn:
                 slots = {s["id"]: s for s in self.slots(conn)}
@@ -621,7 +623,7 @@ class Dataset:
                 for (sid, cols), ids in groups.items():
                     source = resolver.source(sid)
                     if source is not None:
-                        fps[(sid, cols)] = source.fingerprints(ids, list(cols) or None)
+                        fps[(sid, cols)] = source.fingerprints(ids, list(cols) or None, from_index=from_index)
                 updates, affected = [], set()
                 for c in cells:
                     slot = slots.get(c["slot_id"])

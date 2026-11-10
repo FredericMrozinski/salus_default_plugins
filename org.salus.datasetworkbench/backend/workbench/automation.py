@@ -298,6 +298,7 @@ def run(dataset, overwrite: bool = False) -> dict:
 
         # 2. derivations, in an order where every field comes after the one it reads
         derive = [(by_id[k], rules[k]) for k in order(rules, by_id)]
+        touched: set[int] = set()
         with dataset.connect() as conn, Tx(conn):
             ensure_issues_table(conn)
             now = now_iso()
@@ -310,11 +311,17 @@ def run(dataset, overwrite: bool = False) -> dict:
                 conn.execute("UPDATE cells SET ref_source_id=?, ref_item_id=?, ref_fingerprint=?, ref_label=? WHERE entry_id=? AND slot_id=?",
                              (source_id, item, fingerprint, label, entry_id, int(source_key)))
                 result["created"] += 1
+                touched.add(entry_id)
             if derive:
                 counts = derive_cells(conn, catalog, by_id, derive, overwrite=overwrite, write=True)
                 for key in ("derived", "flagged", "overwritten"):
                     result[key] = counts[key]
-        dataset.recompute()
+                touched |= counts["entries"]
+        # Only the entries this run created or changed are evaluated again, from the sources' index (the files were
+        # looked at a moment ago): a full re-check of every file of the dataset after every refresh was the slow part.
+        if touched:
+            dataset.recompute(entry_ids=sorted(touched), from_index=True)
+        result["changed"] = len(touched)
     return result
 
 
@@ -328,16 +335,16 @@ def derive_cells(conn, catalog, by_id: dict, derive: list, overwrite: bool, writ
     `write`: False only counts (nothing is changed, the issues table is not touched).
 
     Returns {derived (cells filled or overwritten), overwritten, flagged, conflicts, examples: [{entry, field, current,
-    derived}] (the first `examples`)}."""
-    out = {"derived": 0, "overwritten": 0, "flagged": 0, "conflicts": 0, "examples": []}
+    derived}] (the first `examples`), entries: the ids of the entries whose cells or flags changed}."""
+    out = {"derived": 0, "overwritten": 0, "flagged": 0, "conflicts": 0, "examples": [], "entries": set()}
     cells: dict[int, dict[int, dict]] = {}
     wanted = {s["id"] for s, _ in derive} | {r["from"] for _, r in derive}
     for c in conn.execute(f"SELECT * FROM cells WHERE slot_id IN ({','.join('?' * len(wanted))})", sorted(wanted)):
         cells.setdefault(c["entry_id"], {})[c["slot_id"]] = dict(c)
 
     def clear_issue_of(entry_id, slot_id):
-        if write:
-            conn.execute(f"DELETE FROM {ISSUES_TABLE} WHERE entry_id=? AND slot_id=?", (entry_id, slot_id))
+        if write and conn.execute(f"DELETE FROM {ISSUES_TABLE} WHERE entry_id=? AND slot_id=?", (entry_id, slot_id)).rowcount:
+            out["entries"].add(entry_id)  # its flag went away: its state changes
 
     for entry_id, row in cells.items():
         for slot, rule in derive:
@@ -368,6 +375,7 @@ def derive_cells(conn, catalog, by_id: dict, derive: list, overwrite: bool, writ
             except (ValueError, KeyError) as e:
                 if current is None:  # an empty cell that cannot be filled: flagged
                     out["flagged"] += 1
+                    out["entries"].add(entry_id)
                     if write:
                         problem = str(e).strip("'\"") if isinstance(e, KeyError) else str(e)
                         conn.execute(f"INSERT INTO {ISSUES_TABLE}(entry_id, slot_id, message) VALUES(?,?,?)"
@@ -387,6 +395,7 @@ def derive_cells(conn, catalog, by_id: dict, derive: list, overwrite: bool, writ
                     continue
                 out["overwritten"] += 1
             out["derived"] += 1
+            out["entries"].add(entry_id)
             # the cell now holds the derived value (in memory too, so chains read it)
             if slot["kind"] == "value":
                 if write:

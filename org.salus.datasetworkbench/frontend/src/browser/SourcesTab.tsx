@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createContext, DragEvent, useContext, useState } from "react";
 import { bytes } from "../shared/format";
-import { useDebounced, useJob, useRefreshProgress } from "../shared/hooks";
+import { useDebounced, useJob } from "../shared/hooks";
 import { api, encode } from "../shared/salus";
 import type { FileListing, GroupNode, SearchHit, SourceNode, TreeNode } from "../shared/types";
 import { Icon } from "../shared/icons";
@@ -10,6 +10,7 @@ import { Empty, ErrorLine, flattenSources, useTree } from "../shared/ui";
 import { copyText, openPath } from "./actions";
 import { Dropped, fromDrop } from "./upload";
 import { openUploadPanel } from "./uploadQueue";
+import { refresh, RefreshBar, RefreshButton, useRefreshing, waitForJobs } from "./refresh";
 import { canMove, ConvertGroupDialog, DeleteGroupDialog, DeleteItemDialog, IssuesDialog, MoveDialog, moveNode, NewGroupDialog, NewSourceDialog, RemoveSourceDialog, RenameDialog, TableSetupDialog } from "./dialogs";
 
 type Dialog =
@@ -128,36 +129,6 @@ function useDropTarget(to: string, onOver: (over: boolean) => void) {
   };
 }
 
-/** Waits until the backend has no running jobs (asks it, since events do not always arrive). A Refresh of a large remote
- *  folder can take long, so this waits up to two hours, asking every second. */
-async function waitForJobs() {
-  for (let i = 0; i < 7200; i++) {
-    const { running } = await api<{ running: number }>("GET", "/jobs");
-    if (!running) return;
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-  }
-}
-
-const PHASES: Record<string, string> = { update: "saving", datasets: "updating the datasets", ingest: "reading the CSV" };
-
-/** Progress of Refresh, under the toolbar. It does not block anything: the backend reads the cohorts one after the other in
- *  the background, and the rest of the workbench keeps working meanwhile. The bar moves on per cohort (how many files a
- *  folder holds is only known once it has been read). */
-function RefreshBar() {
-  const p = useRefreshProgress();
-  const where = p && p.count ? `${p.index} of ${p.count}${p.source ? `: ${p.source}` : ""}` : "";
-  const what = !p ? "starting…" : PHASES[p.phase] ?? (p.files ? `${p.files.toLocaleString()} files so far` : "reading…");
-  return (
-    <div className="refresh-bar" role="status" aria-live="polite">
-      <div className="refresh-text">
-        <span>Refreshing{where ? ` ${where}` : "…"}</span>
-        <span className="faint"> · {what}</span>
-      </div>
-      {p && p.count ? <progress value={p.index - 1 + (p.phase === "scan" ? 0.3 : 0.8)} max={p.count} /> : <progress />}
-    </div>
-  );
-}
-
 export function SourcesTab() {
   const tree = useTree();
   const [selectedGroup, setSelectedGroup] = useState("");
@@ -177,21 +148,7 @@ export function SourcesTab() {
     },
     onError: (error) => window.alert(error instanceof Error ? error.message : String(error)),
   });
-  const [refreshing, setRefreshing] = useState(false);
-  // Rescans every source, then waits for the scans by asking the backend (not by waiting for events,
-  // which do not always arrive) and reloads what is shown.
-  const refresh = async () => {
-    setRefreshing(true);
-    try {
-      await api("POST", "/scan");
-      await waitForJobs();
-    } catch (error) {
-      window.alert(error instanceof Error ? error.message : String(error));
-    } finally {
-      setRefreshing(false);
-      queryClient.invalidateQueries();
-    }
-  };
+  const refreshing = useRefreshing();
   const drag: Drag = { dragging, setDragging, drop: (to) => dragging && (setDragging(null), move.mutate({ path: dragging, to })) };
 
   return (
@@ -211,11 +168,9 @@ export function SourcesTab() {
         <span className="grow faint" title="Where new folders and source cohorts go. Click a folder to choose it.">
           {selectedGroup ? `in ${selectedGroup}` : ""}
         </span>
-        <button className="icon-button" title="Refresh: look for changed files in all source cohorts" disabled={refreshing} onClick={refresh}>
-          <Icon name="refresh" size={22} />
-        </button>
+        <RefreshButton />
       </div>
-      {refreshing && <RefreshBar />}
+      <RefreshBar />
       <div className="search-row">
         <input
           type="search"
@@ -233,7 +188,7 @@ export function SourcesTab() {
           showMenu(e, [
             ...newItems("", setDialog, { folder: "New folder", file: "New general source cohort", table: "New tabular source cohort" }),
             "separator",
-            { label: "Refresh", icon: <Icon name="refresh" />, onSelect: refresh },
+            { label: "Refresh", icon: <Icon name="refresh" />, disabled: refreshing, onSelect: refresh },
           ])
         }
       >

@@ -152,6 +152,9 @@ def connect(path: Path, create: bool = False) -> sqlite3.Connection:
         conn.execute("PRAGMA journal_mode=WAL")  # persistent: stored in the database file
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=30000")
+    # In WAL mode NORMAL still never corrupts the database; a power cut can only lose the last commits. It saves an fsync
+    # per commit, which on a slow disk (a server's HDD) is what most writes wait for.
+    conn.execute("PRAGMA synchronous=NORMAL")
     return conn
 
 

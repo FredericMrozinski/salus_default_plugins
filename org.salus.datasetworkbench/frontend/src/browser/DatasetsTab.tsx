@@ -6,6 +6,7 @@ import { Icon } from "../shared/icons";
 import { useMenu } from "../shared/menu";
 import { Badge, DeleteDialog, Empty, ErrorLine, Field, Modal } from "../shared/ui";
 import { RenameDialog } from "./dialogs";
+import { refresh, RefreshBar, RefreshButton, useRefreshing } from "./refresh";
 
 export function DatasetsTab() {
   const queryClient = useQueryClient();
@@ -33,6 +34,7 @@ export function DatasetsTab() {
     },
   });
 
+  const refreshing = useRefreshing();
   return (
     <>
       <div className="toolbar">
@@ -40,11 +42,10 @@ export function DatasetsTab() {
           <Icon name="add" size={22} /> Dataset
         </button>
         <span className="grow" />
-        <button className="icon-button" title="Refresh" onClick={() => queryClient.invalidateQueries({ queryKey: ["datasets"] })}>
-          <Icon name="refresh" size={22} />
-        </button>
+        <RefreshButton />
       </div>
-      <div className="scroll" onContextMenu={(e) => showMenu(e, [{ label: "New dataset…", icon: <Icon name="add" />, onSelect: () => setCreating(true) }, { label: "Refresh", icon: <Icon name="refresh" />, onSelect: () => queryClient.invalidateQueries({ queryKey: ["datasets"] }) }])}>
+      <RefreshBar />
+      <div className="scroll" onContextMenu={(e) => showMenu(e, [{ label: "New dataset…", icon: <Icon name="add" />, onSelect: () => setCreating(true) }, { label: "Refresh", icon: <Icon name="refresh" />, disabled: refreshing, onSelect: refresh }])}>
         <ErrorLine error={datasets.error} />
         {datasets.isLoading && <Empty>Loading…</Empty>}
         {datasets.data?.length === 0 && <Empty>No datasets yet.</Empty>}

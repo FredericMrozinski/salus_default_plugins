@@ -117,14 +117,18 @@ class Workbench:
             return len(self._running)
 
     def source_changed(self, source_id: str) -> None:
-        """After a scan, an ingest or an upload: refreshes the states of all cells that reference the source."""
+        """After a scan, an ingest or an upload: refreshes the states of all cells that reference the source.
+
+        The files' fingerprints come from the source's index, which the scan (or the upload) has just brought up to date:
+        looking at every referenced file again would read the disk a second time, which on a slow disk kept the backend
+        busy long after a Refresh. Opening a dataset still checks the files themselves (check_dataset)."""
         self.notify({"type": "source_changed", "source": source_id})
         referencing = self.datasets.datasets_referencing(source_id)
         for dataset in referencing:
-            dataset.recompute(source_id=source_id)
+            dataset.recompute(source_id=source_id, from_index=True)
         changed = {d.id for d in referencing}
         for dataset in self.datasets.automated(source_id):
-            if any(dataset.run_automation().values()):
+            if dataset.run_automation()["changed"]:
                 changed.add(dataset.id)
         for dataset_id in sorted(changed):
             self.notify({"type": "dataset_changed", "dataset": dataset_id})
