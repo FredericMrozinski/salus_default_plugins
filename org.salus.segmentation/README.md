@@ -23,7 +23,8 @@ exported the same way. The images are only read. Everything the plugin writes go
 ```
 
 Open an existing project with the folder button and its save folder. The list of known projects is kept in `~/.salus/segmentation-projects.json`
-(plugin settings are for settings, not data). Projects cannot be removed from the list in the browser for now.
+(plugin settings are for settings, not data); the setting *Folder for the list of projects* puts it elsewhere. A new folder
+takes the list over from the old place the next time a project is created, opened or removed; the old file is left as it is. Projects cannot be removed from the list in the browser for now.
 
 **Images without a pyramid.** An image whose smallest level is still larger than 4096 px (no pyramid, or one that stops too
 early; a picture read by Pillow has a single level) has to be read once at full resolution before it can be shown zoomed

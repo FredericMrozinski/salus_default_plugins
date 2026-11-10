@@ -50,7 +50,25 @@ from slides import Slides
 
 log = logging.getLogger("segmentation")
 app = salus.Plugin()
-registry = Registry(Path.home() / ".salus" / "segmentation-projects.json")
+REGISTRY_NAME = "segmentation-projects.json"
+DEFAULT_REGISTRY = Path.home() / ".salus" / REGISTRY_NAME
+
+
+def registry_file() -> Path:
+    """Where the list of known projects is kept: in the folder of the `projects_list_folder` setting (`~` and relative
+    paths from the home folder), or ~/.salus when it is empty or cannot be read."""
+    try:
+        folder = str(app.config.get_blocking("projects_list_folder", "") or "").strip()
+    except Exception as e:  # noqa: BLE001 - not readable (e.g. while the plugin starts): the default
+        log.debug("projects_list_folder not read: %s", e)
+        folder = ""
+    if not folder:
+        return DEFAULT_REGISTRY
+    path = Path(folder).expanduser()
+    return (path if path.is_absolute() else Path.home() / path) / REGISTRY_NAME
+
+
+registry = Registry(registry_file, fallback=DEFAULT_REGISTRY)
 slides = Slides()
 NO_CACHE = [("cache-control", "no-store")]
 TILE_CACHE = [("cache-control", "private, max-age=86400, immutable")]

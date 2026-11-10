@@ -382,18 +382,30 @@ class Project:
 
 
 class Registry:
-    """The projects this plugin knows (created or opened), kept in a small file in the user's home folder.
+    """The projects this plugin knows (created or opened), kept in a small file (by default in the user's home folder,
+    see the `projects_list_folder` setting).
 
-    Salus' plugin settings are for settings, not data, so the list lives here.
+    Salus' plugin settings are for settings, not data, so the list lives here. `file` is the file, or a function that
+    gives it (read on every use, so a changed setting applies at once). `fallback`: where the list was kept before; while
+    `file` does not exist yet, the list is read from there, and the next change writes it to `file` (so moving the list
+    keeps the projects; the old file stays as it was).
     """
 
-    def __init__(self, file: Path):
-        self.file = file
+    def __init__(self, file, fallback: Path | None = None):
+        self._file = file
+        self.fallback = fallback
         self.lock = threading.Lock()
 
+    @property
+    def file(self) -> Path:
+        return self._file() if callable(self._file) else self._file
+
     def load(self) -> list[dict]:
+        file = self.file
+        if not file.exists() and self.fallback is not None and self.fallback != file:
+            file = self.fallback
         try:
-            data = json.loads(self.file.read_text(encoding="utf-8"))
+            data = json.loads(file.read_text(encoding="utf-8"))
             return [e for e in data.get("projects", []) if isinstance(e, dict) and "save" in e]
         except (OSError, ValueError, AttributeError):
             return []

@@ -146,6 +146,19 @@ class ProjectTest(Base):
         reg.forget(self.project.id)
         self.assertEqual(reg.load(), [])
 
+    def test_registry_moves_to_a_new_folder(self):
+        old = Registry(self.dir / "old" / "reg.json")
+        old.remember(self.project)
+        folder = [self.dir / "old"]
+        reg = Registry(lambda: folder[0] / "reg.json", fallback=self.dir / "old" / "reg.json")
+        folder[0] = self.dir / "new"  # the setting changed
+        self.assertEqual([e["id"] for e in reg.load()], [self.project.id])  # read from the old place
+        self.assertFalse((self.dir / "new" / "reg.json").exists())
+        reg.forget("nothing")  # any change writes the list to the new place
+        self.assertTrue((self.dir / "new" / "reg.json").is_file())
+        self.assertEqual([e["id"] for e in reg.load()], [self.project.id])
+        self.assertTrue((self.dir / "old" / "reg.json").is_file())  # the old file stays
+
 
 class AnnotationTest(Base):
     def store(self):

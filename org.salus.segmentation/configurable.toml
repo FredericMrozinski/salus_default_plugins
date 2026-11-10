@@ -52,6 +52,15 @@ type = "bool"
 default = true
 
 [[setting]]
+key = "projects_list_folder"
+name = "Folder for the list of projects"
+description = """Where the plugin keeps its list of the projects you created or opened (the file segmentation-projects.json). \
+Empty: the .salus folder in your home folder. The projects themselves stay where they are; only this list moves. When you \
+choose a new folder, the list is carried over from the old place the next time a project is created, opened or removed \
+(the old file stays). Applies at once."""
+type = "directory-path"
+
+[[setting]]
 key = "fill_opacity"
 name = "Annotation fill"
 description = """How strongly the annotations are filled with their class color in the viewer, in percent (0: outlines only). \
