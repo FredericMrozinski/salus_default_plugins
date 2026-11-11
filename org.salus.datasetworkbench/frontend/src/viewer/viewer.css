@@ -21,9 +21,8 @@
 /* The header stacked: name, then Automation and Edit schema sharing the row, then + Entry across the width. */
 .viewer-head { flex-direction: column; align-items: stretch; gap: var(--salus-space-2); }
 .viewer-head h2 { flex: none; }
-.viewer-head-row { display: flex; gap: var(--salus-space-1); }
-.viewer-head-row > button { flex: 1; min-width: 0; justify-content: center; }
-.viewer-head > button { width: 100%; justify-content: center; }
+.viewer-head-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--salus-space-1); }
+.viewer-head-grid > button { min-width: 0; justify-content: center; }
 .viewer-head button { min-height: 30px; padding-top: 5px; padding-bottom: 5px; }
 /* the 22px plus of + Entry would make it taller than the two buttons above */
 .viewer-head button .icon { margin: -4px 0; }

@@ -110,7 +110,43 @@ export type Nav =
   | { type: "open_dataset"; dataset: string }
   | { type: "show_entry"; dataset: string; entry: number }
   | { type: "edit_schema"; dataset: string }
-  | { type: "edit_automation"; dataset: string };
+  | { type: "edit_automation"; dataset: string }
+  | { type: "export_dataset"; dataset: string };
+
+export type ExportFormat = "folder" | "zip" | "json";
+/** What the export wizard asks (backend export.py, normalize_options). */
+export type ExportOptions = {
+  include: { incomplete: boolean; corrupted: boolean };
+  /** slot id → key in the exported entries */
+  keys: Record<string, string>;
+  copy_sources: boolean;
+  paths: "absolute" | "relative";
+  /** source id → prefix of its relative paths */
+  prefixes: Record<string, string>;
+  format: ExportFormat;
+  destination: string;
+};
+export type ExportPreview = {
+  error: string | null;
+  fields: { slot: number; name: string; label: string; kind: SlotKind }[];
+  counts: Record<EntryState, number>;
+  entries: number;
+  keys: Record<string, string>;
+  sources: { id: string; name: string; kind: "file" | "table"; folder: string; location: string | null; csv?: string }[];
+  files: number;
+  bytes: number;
+  missing: number;
+  destination: { path: string; exists: boolean; replace: "file" | "folder" | null; error: string | null };
+  default_destination: string;
+  free: number | null;
+  sample: Record<string, unknown> | null;
+};
+export type ExportStatus = {
+  state: "idle" | "running" | "done" | "failed" | "cancelled";
+  progress?: { phase?: string; done?: number; total?: number; bytes?: number; total_bytes?: number };
+  result?: { path: string; entries: number; files: number; bytes: number; missing: number } | null;
+  error?: string | null;
+};
 
 export type WorkbenchEvent =
   | { type: "tree_changed" }

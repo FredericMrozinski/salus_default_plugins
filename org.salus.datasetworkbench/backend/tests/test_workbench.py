@@ -418,6 +418,33 @@ class FileSourceTests(Base):
         self.assertEqual(listing["folders"][0]["name"], "sub")
         self.assertEqual([f["name"] for f in source.list_dir("sub", "", 100, 0)["files"]], ["b.pdf"])
 
+    def test_empty_folders_are_listed_and_can_be_created(self):
+        source = self.file_source()
+        write(source.path / "full/a.svs")
+        (source.path / "empty").mkdir()
+        (source.path / ".hidden_dir").mkdir()
+        source.scan()
+        folders = source.list_dir("", "", 100, 0)["folders"]
+        self.assertEqual([(f["name"], f["count"]) for f in folders], [("empty", 0), ("full", 1)])
+        self.assertEqual(source.create_folder("full", "new"), "full/new")
+        self.assertTrue((source.path / "full/new").is_dir())
+        self.assertEqual([f["path"] for f in source.list_dir("full", "", 100, 0)["folders"]], ["full/new"])
+        with self.assertRaises(WorkbenchError) as caught:
+            source.create_folder("full", "new")
+        self.assertEqual(caught.exception.status, 409)
+        for parent, name in [("", "../x"), ("", ".dot"), ("../up", "x"), ("missing", "x"), ("", "source.sqlite")]:
+            with self.assertRaises(WorkbenchError):
+                source.create_folder(parent, name)
+
+    def test_a_new_folder_follows_the_umask(self):
+        source = self.file_source()
+        old = os.umask(0o027)
+        try:
+            source.create_folder("", "shared")
+        finally:
+            os.umask(old)
+        self.assertEqual((source.path / "shared").stat().st_mode & 0o777, 0o750)
+
     def test_moved_file_keeps_its_id_and_deleted_file_is_missing(self):
         source = self.file_source()
         a = write(source.path / "a.svs", b"aaaa")

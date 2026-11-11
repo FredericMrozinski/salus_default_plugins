@@ -17,6 +17,7 @@ from functools import wraps
 import salus_sdk as salus
 from workbench.active import Active
 from workbench.automation import conflicts, preview
+from workbench import export
 from workbench.settings import RootSettings
 from workbench.uploads import CHUNK_SIZE
 from workbench.util import WorkbenchError
@@ -218,6 +219,18 @@ def rename_item(req):
     return {"path": wb.rename_item(req.params["id"], data.get("path", ""), data.get("name"))}
 
 
+@route("POST", "/sources/{id}/folders")
+def create_folder(req):
+    """Makes an empty folder ({parent, name}) in a general source cohort; returns {path}."""
+    source = wb.catalog.find_source(req.params["id"])
+    if source.kind != "file":
+        raise salus.HTTPError(400, "Only general source cohorts have folders.")
+    data = body(req)
+    path = source.create_folder(data.get("parent", ""), data.get("name"))
+    notify({"type": "source_changed", "source": source.id})
+    return salus.Response.json({"path": path}, status=201)
+
+
 @route("DELETE", "/sources/{id}/items")
 def delete_item(req):
     wb.delete_item(req.params["id"], req.query.get("path", ""))
@@ -406,6 +419,33 @@ def preview_automation(req):
     data = body(req)
     sample = data.get("sample")
     return preview(wb.datasets.get(req.params["id"]), data, None if sample is None else str(sample))
+
+
+@route("POST", "/datasets/{id}/export/preview")
+def preview_export(req):
+    """What an export with these options ({include, keys, copy_sources, paths, prefixes, format, destination}) would write,
+    and whether its destination exists (export.preview). Nothing is written."""
+    return export.preview(wb.datasets.get(req.params["id"]), body(req))
+
+
+@route("POST", "/datasets/{id}/export")
+def start_export(req):
+    """Starts the export ({options, overwrite}) in the background (job "export"). 409 if the destination exists and
+    `overwrite` is not set: the wizard asks first."""
+    data = body(req)
+    return wb.export_dataset(req.params["id"], data.get("options") or {}, bool(data.get("overwrite")))
+
+
+@route("GET", "/datasets/{id}/export")
+def export_status(req):
+    """The last export of the dataset since the backend started: {state: idle|running|done|failed|cancelled, progress, result, error}."""
+    return wb.export_status(req.params["id"])
+
+
+@route("POST", "/datasets/{id}/export/cancel")
+def cancel_export(req):
+    wb.cancel_export(req.params["id"])
+    return None
 
 
 @route("GET", "/datasets/{id}/stats")

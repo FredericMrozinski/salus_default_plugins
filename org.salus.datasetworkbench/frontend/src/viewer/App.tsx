@@ -19,7 +19,7 @@ export function App() {
     const apply = (nav: Nav) => {
       if (nav.type === "open_dataset") (setDataset(nav.dataset), setSelected(null));
       else if (nav.type === "show_entry") (setDataset(nav.dataset), setSelected(nav.entry));
-      else if (nav.type === "edit_schema" || nav.type === "edit_automation") setDataset(nav.dataset);
+      else if (nav.type === "edit_schema" || nav.type === "edit_automation" || nav.type === "export_dataset") setDataset(nav.dataset);
     };
     const initial = initialNav();
     if (initial) apply(initial);
@@ -135,10 +135,10 @@ function Viewer({ dataset, selected, onSelect }: { dataset: string; selected: nu
 
   return (
     <div className="app">
-      {/* Header, stacked: the dataset's name, then Automation and Edit schema side by side, then + Entry across the width. */}
+      {/* Header, stacked: the dataset's name, then a 2×2 grid: Automation, Edit schema / Export, + Entry. */}
       <div className="toolbar viewer-head">
         <h2 title={detail.data?.name}>{detail.data?.name ?? dataset}</h2>
-        <div className="viewer-head-row">
+        <div className="viewer-head-grid">
           <button
             className={`small ${automated ? "automation-on" : ""}`}
             disabled={!detail.data || schema.length === 0}
@@ -152,10 +152,14 @@ function Viewer({ dataset, selected, onSelect }: { dataset: string; selected: nu
             <Icon name="pen" size={16} />
             Edit schema
           </button>
-        </div>
+        <button className="small" disabled={!detail.data} title="Export the dataset as JSON, optionally with its source files" onClick={() => navigate("entry-editor", { type: "export_dataset", dataset })}>
+          <Icon name="export" size={16} />
+          Export
+        </button>
         <button className="small primary" disabled={add.isPending || schema.length === 0} title={schema.length === 0 ? "Define the schema first" : "Add an entry"} onClick={() => add.mutate()}>
           <Icon name="add" size={22} /> Entry
         </button>
+        </div>
       </div>
       <div className="toolbar">
         <input className="grow" placeholder="Search entries…" value={search} onChange={(e) => setSearch(e.target.value)} />

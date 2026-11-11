@@ -6,6 +6,7 @@ import threading
 from pathlib import Path
 from typing import Callable
 
+from . import export
 from .catalog import Catalog
 from .dataset import DatasetStore
 from .sources import FileSource, TableSource
@@ -26,6 +27,7 @@ class Workbench:
         self.state = {"dataset": None, "entry": None}
         self._running: set[tuple] = set()
         self._guard = threading.Lock()
+        self._exports: dict[str, dict] = {}  # by dataset: the last export's {state, progress, result, error, cancel}
 
     # -- jobs
     def start_job(self, kind: str, target: str, work: Callable[[Callable[[dict], None]], dict]) -> dict:
@@ -260,6 +262,53 @@ class Workbench:
             return result
 
         return self.start_job("automation", dataset_id, work)
+
+    # -- export (export.py)
+    def export_dataset(self, dataset_id: str, options, overwrite: bool = False) -> dict:
+        """Starts an export (job "export"); one at a time per dataset. Its progress events carry {phase, done, total, bytes,
+        total_bytes}; `export_status` says the same for a wizard that is opened while it runs."""
+        dataset = self.datasets.get(dataset_id)
+        options = export.normalize_options(options, dataset, dataset.slots())
+        destination = export.check_destination(dataset, options)  # say what is wrong now, not in a failed job
+        if destination["error"]:
+            raise WorkbenchError(destination["error"])
+        if destination["replace"] and not overwrite:
+            raise WorkbenchError(f"{destination['path']} exists already.", 409)
+        cancel = threading.Event()
+        status = {"state": "running", "progress": {"phase": "collect"}, "result": None, "error": None, "cancel": cancel}
+
+        def work(progress):
+            def report(info: dict) -> None:
+                status["progress"] = info
+                progress(info)
+            try:
+                status["result"] = export.run(dataset, options, overwrite, report, cancel)
+                status["state"] = "done"
+                return status["result"]
+            except export.Cancelled:
+                status["state"] = "cancelled"
+                raise
+            except Exception as e:
+                status["state"], status["error"] = "failed", getattr(e, "message", None) or str(e)
+                raise
+
+        job = self.start_job("export", dataset_id, work)
+        if job["running"]:
+            raise WorkbenchError("An export of this dataset is running already.", 409)
+        with self._guard:
+            self._exports[dataset_id] = status
+        return {"job": job["job"], "path": destination["path"]}
+
+    def export_status(self, dataset_id: str) -> dict:
+        status = self._exports.get(dataset_id)
+        if status is None:
+            return {"state": "idle"}
+        return {k: v for k, v in status.items() if k != "cancel"}
+
+    def cancel_export(self, dataset_id: str) -> None:
+        status = self._exports.get(dataset_id)
+        if status is not None and status["state"] == "running":
+            status["cancel"].set()
 
     def set_state(self, dataset, entry) -> dict:
         self.state = {"dataset": dataset, "entry": entry}

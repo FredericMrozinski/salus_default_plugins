@@ -415,10 +415,36 @@ class FileSource(Source):
             files = conn.execute(
                 f"SELECT * FROM items WHERE {bounds} instr(substr(rel_path, {start}), '/') = 0"
                 " ORDER BY rel_path LIMIT ? OFFSET ?", [*args, limit, offset]).fetchall()
-        return {"dir": directory,
-                "folders": [{"name": f["name"], "path": prefix + f["name"], "count": f["n"], "missing": f["missing"] or 0}
-                            for f in folders] if offset == 0 else [],
+        listed = {f["name"]: {"name": f["name"], "path": prefix + f["name"], "count": f["n"], "missing": f["missing"] or 0}
+                  for f in folders} if offset == 0 else {}
+        if offset == 0:
+            # Folders without files (yet) are not in the index: they come from the disk, so a folder made to upload into shows up.
+            for name in self._subfolders(directory):
+                listed.setdefault(name, {"name": name, "path": prefix + name, "count": 0, "missing": 0})
+        return {"dir": directory, "folders": sorted(listed.values(), key=lambda f: f["name"]),
                 "files": [self._row_to_item(r) for r in files], "more": len(files) == limit}
+
+    def _subfolders(self, rel_dir: str) -> list[str]:
+        """The names of the folders directly in a folder of the source, on disk (hidden ones left out, as the scan does)."""
+        try:
+            with os.scandir(self.path / rel_dir if rel_dir else self.path) as entries:
+                return [e.name for e in entries if not hidden(e.name) and not is_internal(e.name) and e.is_dir(follow_symlinks=False)]
+        except OSError:
+            return []
+
+    def create_folder(self, parent: str, name: str) -> str:
+        """Makes an empty folder in the source (to upload into); returns its relative path. Its mode follows the umask."""
+        parent = safe_rel_path(parent, allow_empty=True)
+        name = check_file_name(name)
+        base = self.path / parent if parent else self.path
+        if not base.is_dir():
+            raise NotFound(f"'{parent}' is not a folder of this source.")
+        rel = f"{parent}/{name}" if parent else name
+        try:
+            (self.path / rel).mkdir()
+        except FileExistsError:
+            raise WorkbenchError(f"'{name}' already exists here.", 409) from None
+        return rel
 
     def fingerprints(self, item_ids, columns=None, from_index: bool = False) -> dict:
         found = {}

@@ -5,7 +5,7 @@ Design: `design/dataset-workbench.md` in the Salus repository.
 
 | Component | Panel | What it does |
 |---|---|---|
-| `browser` (entry) | left | **Sources** tab: folders, source cohorts: file sources (browse, search, upload), table sources (CSV, columns, issues). A folder without source cohorts in it can become a general source cohort (right-click › *Convert to general source cohort*; its files become items, nothing moves). **Datasets** tab: list, create, delete. |
+| `browser` (entry) | left | **Sources** tab: folders, source cohorts: file sources (browse, search, upload), table sources (CSV, columns, issues). A folder without source cohorts in it can become a general source cohort (right-click › *Convert to general source cohort*; its files become items, nothing moves). Inside a general source cohort every folder on disk is shown, also an empty one; right-click the cohort or one of its folders › *Create folder here…* makes an empty folder to upload into (`POST /sources/{id}/folders {parent, name}`). **Datasets** tab: list, create, delete. |
 | `dataset-viewer` | right | All entries of one dataset (virtual list, search), **Automation**, **Edit schema**, `+ Entry`; the footer counts the entries per state, and clicking a count shows only those. Several entries can be picked (Ctrl/Cmd+click, Shift+click for a range, Ctrl/Cmd+A for all the list shows, Esc for none); the right-click menu deletes them (confirmed by typing "delete") and, with the automation on, runs it now, which creates the deleted entries again if their source items still match. |
 | `entry-editor` | center | Edits one entry (typed value editors, searchable reference pickers, item states, "Mark as valid"), the dataset schema and its automation. |
 
@@ -73,6 +73,38 @@ database (`meta` key `automation`) and so survive restarts and travel with the d
   text of your own.
 - Backend: `backend/workbench/automation.py`; routes `GET|PUT /datasets/{id}/automation`, `POST /datasets/{id}/automation/run`,
   `POST /datasets/{id}/automation/preview`. Tests: `backend/tests/test_automation.py`.
+
+## Export
+
+The **Export** button (upload icon) in the entries panel, below *Automation* and *Edit schema*, opens the export wizard in the center panel.
+It goes through pages like the Pharaoh plugin; every page shows what the export would do (the backend checks the options on each change):
+
+1. **Entries:** valid entries are always exported; incomplete and corrupted ones only if ticked (each option shows how many there are).
+2. **Keys:** each field becomes a key of every exported entry, its name by default; rename keys for the export here (they must differ and
+   not be empty). The page shows the first entry as it would be written.
+3. **Sources:** either **copy the source files** into the export (only the files the exported entries use, plus the CSV of each table cohort,
+   under `sources/<the cohort's folder in the workbench>/`; the JSON names them relative to itself), or **refer to them where they are**:
+   by **absolute path** on the server, or by their **path inside the cohort** after an optional per-cohort **prefix** (none: just the
+   relative path).
+4. **Destination:** a **folder** (`dataset.json`, and `sources/` with copies), a **zip file** (the same; copied files are stored, not
+   compressed again) or **only the JSON file** (not with copies). The path is on the server; the default is `<workbench>/exports/<dataset>`.
+   The page shows the number of entries, the size of the copies and the free space there.
+5. **Export:** progress, *Cancel export*, and where it went.
+
+The JSON: `{format: "salus.datasetworkbench.export", version: 1, dataset: {id, name}, exported_at, states, paths, fields: [{key, name,
+label, kind, type, required, sources}], sources: [{name, kind, location, csv?}], entries: [{<key>: value}]}`. A value field is its value
+(null when empty), a file field the file's path, a row field `{key, values: {column: value}}`. A file or row that is gone is null.
+
+**Writing:** the export is written under a temporary name next to the destination and renamed into place when complete, so a failed or
+cancelled export leaves the destination as it was. An existing destination is only replaced after you confirm: a file with a click, a folder
+only if it holds an earlier export (`dataset.json`) and after typing "delete" (its contents go). Destinations inside the workbench's
+`sources/` or `datasets/` are refused. Files and folders are created the ordinary way (copies do not take over the original's mode), so
+the umask Salus runs with decides their permissions, as for every other file the plugin writes.
+
+Backend: `backend/workbench/export.py`; routes `POST /datasets/{id}/export/preview` (the wizard's checks), `POST /datasets/{id}/export`
+(`{options, overwrite}`, a background job "export"; 409 when the destination exists and `overwrite` is not set), `GET /datasets/{id}/export`
+(the last export's state and progress, so a reopened wizard shows a running one) and `POST /datasets/{id}/export/cancel`.
+Frontend: `src/editor/ExportWizard.tsx`. Tests: `backend/tests/test_export.py`.
 
 ## Layout
 

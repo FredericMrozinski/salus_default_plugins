@@ -26,6 +26,33 @@ export function NewGroupDialog({ parent, onClose }: { parent: string; onClose: (
   );
 }
 
+/** A new, empty folder inside a general source cohort (`parent` "" is the cohort's own folder): somewhere to upload into. */
+export function NewSourceFolderDialog({ source, parent, onClose }: { source: SourceNode; parent: string; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const [name, setName] = useState("");
+  const create = useMutation({
+    mutationFn: () => api("POST", `/sources/${encode(source.id!)}/folders`, { json: { parent, name: name.trim() } }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["files", source.id] });
+      onClose();
+    },
+  });
+  return (
+    <Modal title="New folder" onClose={onClose}>
+      <Field label="Name" hint={`In ${source.name}${parent ? ` / ${parent}` : ""}`}>
+        <input autoFocus value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && name.trim() && create.mutate()} />
+      </Field>
+      <ErrorLine error={create.error} />
+      <div className="modal-actions">
+        <button onClick={onClose}>Cancel</button>
+        <button className="primary" disabled={!name.trim() || create.isPending} onClick={() => create.mutate()}>
+          Create
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
 export function NewSourceDialog({ group, kind, onClose, onCreated }: { group: string; kind: "file" | "table"; onClose: () => void; onCreated: (source: SourceNode) => void }) {
   const [name, setName] = useState("");
   const create = useMutation({

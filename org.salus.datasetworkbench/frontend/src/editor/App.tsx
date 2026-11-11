@@ -5,9 +5,10 @@ import type { DatasetDetail, Nav } from "../shared/types";
 import { Empty, ErrorLine } from "../shared/ui";
 import { EntryForm } from "./EntryForm";
 import { AutomationEditor } from "./AutomationEditor";
+import { ExportWizard } from "./ExportWizard";
 import { SchemaEditor } from "./SchemaEditor";
 
-type View = { dataset: string | null; entry: number | null; mode: "entry" | "schema" | "automation" };
+type View = { dataset: string | null; entry: number | null; mode: "entry" | "schema" | "automation" | "export" };
 
 export function App() {
   const [view, setView] = useState<View>({ dataset: null, entry: null, mode: "entry" });
@@ -17,6 +18,7 @@ export function App() {
       if (nav.type === "open_dataset") setView({ dataset: nav.dataset, entry: null, mode: "entry" });
       else if (nav.type === "show_entry") setView({ dataset: nav.dataset, entry: nav.entry, mode: "entry" });
       else if (nav.type === "edit_automation") setView({ dataset: nav.dataset, entry: null, mode: "automation" });
+      else if (nav.type === "export_dataset") setView({ dataset: nav.dataset, entry: null, mode: "export" });
       else setView({ dataset: nav.dataset, entry: null, mode: "schema" });
     };
     const initial = initialNav();
@@ -40,6 +42,7 @@ export function App() {
   if (detail.error) return <ErrorLine error={detail.error} />;
   if (!detail.data) return <Empty>Loading…</Empty>;
 
+  if (view.mode === "export") return <ExportWizard key={detail.data.id} dataset={detail.data} onDone={() => setView({ ...view, mode: "entry" })} />;
   if (view.mode === "automation")
     return <AutomationEditor key={detail.data.id} dataset={detail.data} onDone={() => setView({ ...view, mode: "entry" })} />;
   if (view.mode === "schema")

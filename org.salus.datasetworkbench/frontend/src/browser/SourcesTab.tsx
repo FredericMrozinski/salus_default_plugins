@@ -11,7 +11,7 @@ import { copyText, openPath } from "./actions";
 import { Dropped, fromDrop } from "./upload";
 import { openUploadPanel } from "./uploadQueue";
 import { refresh, RefreshBar, RefreshButton, useRefreshing, waitForJobs } from "./refresh";
-import { canMove, ConvertGroupDialog, DeleteGroupDialog, DeleteItemDialog, IssuesDialog, MoveDialog, moveNode, NewGroupDialog, NewSourceDialog, RemoveSourceDialog, RenameDialog, TableSetupDialog } from "./dialogs";
+import { canMove, ConvertGroupDialog, DeleteGroupDialog, DeleteItemDialog, IssuesDialog, MoveDialog, moveNode, NewGroupDialog, NewSourceDialog, NewSourceFolderDialog, RemoveSourceDialog, RenameDialog, TableSetupDialog } from "./dialogs";
 
 type Dialog =
   | { type: "group"; parent: string }
@@ -26,7 +26,8 @@ type Dialog =
   | { type: "rename-group"; path: string }
   | { type: "rename-source"; source: SourceNode }
   | { type: "rename-item"; source: SourceNode; path: string }
-  | { type: "delete-item"; source: SourceNode; path: string; folder: boolean };
+  | { type: "delete-item"; source: SourceNode; path: string; folder: boolean }
+  | { type: "new-folder"; source: SourceNode; parent: string };
 
 /** The entries for creating something inside the folder `group` ("" is the top level); the same three everywhere. */
 function newItems(group: string, open: (d: Dialog) => void, labels: { folder: string; file: string; table: string }): MenuItem[] {
@@ -201,6 +202,7 @@ export function SourcesTab() {
           ))}
         </ul>
       </TopLevelArea>
+      {dialog?.type === "new-folder" && <NewSourceFolderDialog source={dialog.source} parent={dialog.parent} onClose={() => setDialog(null)} />}
       {dialog?.type === "group" && <NewGroupDialog parent={dialog.parent} onClose={() => (setDialog(null), queryClient.invalidateQueries({ queryKey: ["tree"] }))} />}
       {dialog?.type === "source" && (
         <NewSourceDialog
@@ -420,6 +422,7 @@ function Source({ node, depth, onDialog }: NodeProps & { node: SourceNode }) {
       ...(node.state === "ambiguous"
         ? [] // several CSV files: remove the extra ones first (they are listed under the source)
         : [{ label: isFile ? "Upload files…" : node.csv ? "Replace the CSV file…" : "Upload the CSV file…", icon: <Icon name="upload" />, onSelect: () => onDialog({ type: "upload", source: node }) }]),
+      ...(isFile ? [{ label: "Create folder here…", icon: <Icon name="folder" />, onSelect: () => onDialog({ type: "new-folder", source: node, parent: "" }) }] : []),
       ...(!isFile && node.state !== "no_csv" && node.state !== "ambiguous" ? [{ label: "Columns and key…", onSelect: () => onDialog({ type: "setup", source: node }) }] : []),
       ...(!isFile && (node.issues ?? 0) > 0 ? [{ label: "Show rows with problems…", onSelect: () => onDialog({ type: "issues", source: node }) }] : []),
       "separator",
@@ -615,6 +618,7 @@ function Folder({ source, folder, depth, onDialog }: { source: SourceNode; folde
           showMenu(e, [
             { label: open ? "Collapse" : "Expand", onSelect: () => setOpen(!open) },
             { label: "Upload into this folder…", icon: <Icon name="upload" />, onSelect: () => onDialog({ type: "upload", source, folder: folder.path }) },
+            { label: "Create folder here…", icon: <Icon name="folder" />, onSelect: () => onDialog({ type: "new-folder", source, parent: folder.path }) },
             "separator",
             { label: "Rename…", icon: <Icon name="edit" />, onSelect: () => onDialog({ type: "rename-item", source, path: folder.path }) },
             { label: "Delete from disk…", icon: <Icon name="delete" />, danger: true, onSelect: () => onDialog({ type: "delete-item", source, path: folder.path, folder: true }) },

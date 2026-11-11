@@ -54,3 +54,41 @@
 @media (max-width: 520px) { .auto-derive { grid-template-columns: 1fr; } .auto-derive > .faint { display: none; } }
 .auto-filter { display: flex; align-items: center; gap: var(--salus-space-2); flex-wrap: wrap; }
 .auto-filter .grow { flex: 1; min-width: 160px; }
+
+/* Export wizard (ExportWizard.tsx): steps like the Pharaoh plugin's. The steps bar and the footer are foreground-1, choices and
+   tables islands on the panel. */
+.wiz-steps { display: flex; gap: 4px; padding: var(--salus-space-2) var(--salus-space-3); align-items: center; flex-wrap: wrap; border-bottom: 2px solid var(--salus-separator-dark); border-image: var(--salus-separator-below); background: var(--salus-depth-foreground-1); font-size: 12px; }
+.wiz-step { display: flex; align-items: center; gap: 6px; color: var(--salus-fg-faint); }
+.wiz-num { width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--salus-border); display: grid; place-items: center; font-size: 11px; }
+.wiz-step.current { color: var(--salus-fg); font-weight: 600; }
+.wiz-step.current .wiz-num { background: var(--salus-accent); color: var(--salus-accent-fg); border-color: transparent; }
+.wiz-step.done .wiz-num { background: var(--salus-depth-foreground-2); color: var(--salus-fg); }
+.wiz-step + .wiz-step::before { content: ""; width: 20px; height: 1px; background: var(--salus-border); margin-right: 2px; }
+.wiz-page { padding: var(--salus-space-3); }
+.wiz-body { display: flex; flex-direction: column; gap: var(--salus-space-3); max-width: 760px; margin: 0 auto; }
+.wiz-body h3 { margin: 0; font-size: 14px; }
+.wiz-body p { margin: 0; }
+.wiz-body code { font-family: var(--salus-font-mono); font-size: 11px; }
+.wiz-footer { display: flex; gap: var(--salus-space-2); align-items: center; padding: var(--salus-space-2) var(--salus-space-3); border-top: 2px solid var(--salus-separator-dark); border-image: var(--salus-separator-above); background: var(--salus-depth-foreground-1); }
+.wiz-footer .grow { flex: 1; }
+.wiz-check { align-items: flex-start; padding: var(--salus-space-2) var(--salus-space-3); border: 1px solid var(--salus-border); border-radius: var(--salus-radius); background: var(--salus-depth-foreground-1); }
+.wiz-check input { margin-top: 2px; }
+.wiz-radios { display: flex; flex-direction: column; gap: var(--salus-space-2); }
+.wiz-radios.inner { margin-top: var(--salus-space-1); }
+.wiz-radio { display: flex; gap: 10px; align-items: flex-start; padding: var(--salus-space-2) var(--salus-space-3); border: 1px solid var(--salus-border); border-radius: var(--salus-radius); background: var(--salus-depth-foreground-1); cursor: pointer; }
+.wiz-radio.on { border-color: var(--salus-accent); }
+.wiz-radio.disabled { cursor: default; opacity: .6; }
+.wiz-radio input { margin-top: 2px; }
+.wiz-radio .wiz-radio { background: var(--salus-depth-default); }
+.wiz-radio-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.wiz-radio-body strong { font-size: 13px; }
+.wiz-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.wiz-table th { text-align: left; font-weight: normal; color: var(--salus-fg-muted); padding: 2px 6px; }
+.wiz-table td { padding: 2px 6px; vertical-align: middle; }
+.wiz-table td input { width: 100%; min-width: 0; }
+.wiz-sample { margin: 0; padding: var(--salus-space-2); max-height: 260px; overflow: auto; border: 1px solid var(--salus-border); border-radius: var(--salus-radius); background: var(--salus-depth-default); white-space: pre-wrap; word-break: break-all; }
+.wiz-summary { display: flex; gap: var(--salus-space-2); flex-wrap: wrap; }
+.wiz-summary > div { display: flex; flex-direction: column; gap: 2px; min-width: 110px; padding: var(--salus-space-2) var(--salus-space-3); border: 1px solid var(--salus-border); border-radius: var(--salus-radius); background: var(--salus-depth-foreground-1); }
+.wiz-bar { height: 12px; border-radius: 6px; background: var(--salus-depth-background-2); overflow: hidden; }
+.wiz-bar > div { height: 100%; background: var(--salus-accent); transition: width .3s; }
+.wiz-bar.done > div { background: var(--salus-success); }

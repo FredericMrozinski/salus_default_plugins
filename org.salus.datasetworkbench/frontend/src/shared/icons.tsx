@@ -17,11 +17,13 @@ const PATHS = {
   bolt: "M10.55,18.2L15.73,12h-4l0.72-5.68L7.83,13H11.3l-0.75,5.2Zm-1.4,2.68l1-6.88H5.9L13.38,3.21h0.46L12.87,11h5L9.62,20.88H9.15Zm2.62-8.63Z",
   // edit_24dp_1F1F1F_FILL0_wght200_GRAD0_opsz24.svg, the pen the segmentation plugin uses for renaming a class
   pen: "M5,19H6.1L16.8,8.3L15.7,7.2L5,17.9V19ZM4,20V17.48L17.18,4.29q0.15-0.14 0.34-0.21T17.91,4T18.3,4.06t0.35,0.23l1.07,1.07q0.17,0.16 0.23,0.35T20,6.1q0,0.2-0.07,0.39T19.71,6.83L6.52,20H4ZM19.02,6.09L17.91,4.98l1.11,1.11ZM16.24,7.76L15.7,7.2l1.1,1.1L16.24,7.76Z",
+  // upload_24dp_1F1F1F_FILL0_wght400_GRAD0_opsz24.svg: the Export button of a dataset
+  export: "M11,16V7.85l-2.6,2.6L7,9l5-5l5,5l-1.4,1.45L13,7.85V16H11ZM6,20q-0.82,0-1.41-0.59T4,18V15H6v3H18V15h2v3q0,0.82-0.59,1.41T18,20H6Z",
 } as const;
 
 export type IconName = keyof typeof PATHS;
 
-const VIEW_BOX: Partial<Record<IconName, string>> = { bolt: "0 0 24 24", pen: "0 0 24 24" };
+const VIEW_BOX: Partial<Record<IconName, string>> = { bolt: "0 0 24 24", pen: "0 0 24 24", export: "0 0 24 24" };
 
 export function Icon({ name, size = 20, title, ...rest }: { name: IconName; size?: number; title?: string } & Omit<SVGProps<SVGSVGElement>, "name">) {
   return (
