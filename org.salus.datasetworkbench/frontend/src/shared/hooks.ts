@@ -13,30 +13,36 @@ export const queryClient: QueryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 5_000, refetchOnWindowFocus: false, retry: 1 } },
 });
 
-// Backend events make the cached views stale; active views refetch.
+// Backend events make the cached views stale; active views refetch. Events come in bursts (every file of a folder upload
+// sends source_changed and tree_changed; a refresh sends one per source and dataset), and every refetch is a request that
+// reads the disk: so they are collected for a moment and each view refetches once for the burst.
+const INVALIDATE_DELAY_MS = 400;
+const staleKeys = new Map<string, unknown[]>();
+let invalidateTimer: ReturnType<typeof setTimeout> | null = null;
+
+function invalidate(...keys: unknown[][]) {
+  for (const key of keys) staleKeys.set(JSON.stringify(key), key);
+  invalidateTimer ??= setTimeout(() => {
+    invalidateTimer = null;
+    const keys = [...staleKeys.values()];
+    staleKeys.clear();
+    for (const queryKey of keys) queryClient.invalidateQueries({ queryKey });
+  }, INVALIDATE_DELAY_MS);
+}
+
 onEvent((event) => {
   switch (event.type) {
     case "config_changed": // another folder: nothing shown so far is valid any more
       queryClient.invalidateQueries();
       break;
     case "tree_changed":
-      queryClient.invalidateQueries({ queryKey: ["tree"] });
-      queryClient.invalidateQueries({ queryKey: ["search"] });
-      queryClient.invalidateQueries({ queryKey: ["datasets"] });
+      invalidate(["tree"], ["search"], ["datasets"]);
       break;
     case "source_changed":
-      queryClient.invalidateQueries({ queryKey: ["tree"] });
-      queryClient.invalidateQueries({ queryKey: ["search"] });
-      queryClient.invalidateQueries({ queryKey: ["files", event.source] });
-      queryClient.invalidateQueries({ queryKey: ["issues", event.source] });
-      queryClient.invalidateQueries({ queryKey: ["suggest", event.source] });
+      invalidate(["tree"], ["search"], ["files", event.source], ["issues", event.source], ["suggest", event.source]);
       break;
     case "dataset_changed":
-      queryClient.invalidateQueries({ queryKey: ["datasets"] });
-      queryClient.invalidateQueries({ queryKey: ["dataset", event.dataset] });
-      queryClient.invalidateQueries({ queryKey: ["entries", event.dataset] });
-      queryClient.invalidateQueries({ queryKey: ["stats", event.dataset] });
-      queryClient.invalidateQueries({ queryKey: ["entry", event.dataset] });
+      invalidate(["datasets"], ["dataset", event.dataset], ["entries", event.dataset], ["stats", event.dataset], ["entry", event.dataset]);
       break;
   }
 });

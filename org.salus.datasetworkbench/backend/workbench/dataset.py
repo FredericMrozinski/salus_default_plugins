@@ -10,7 +10,7 @@ from pathlib import Path
 from . import automation
 from .catalog import Catalog
 from .sources import FileSource, TableSource
-from .util import (NotFound, Tx, WorkbenchError, check_identifier, check_name, chunks, connect, like_escape, lock_for,
+from .util import (NotFound, Tx, WorkbenchError, check_identifier, check_name, chunks, close_idle, connect, like_escape, lock_for,
                    meta_get, meta_set, new_id, now_iso, slugify)
 
 DATASET_DB = "dataset.sqlite"
@@ -286,18 +286,15 @@ class Dataset:
 
     # -- reading
     def slots(self, conn=None) -> list[dict]:
-        own = conn is None
-        conn = conn or self.connect()
-        try:
-            return [{"id": r["id"], "position": r["position"], "name": r["name"], "label": r["label"],
-                     "description": r["description"] or "", "required": bool(r["required"]), "unique": bool(r["unique"]),
-                     "kind": r["kind"], "value_type": r["value_type"], "constraints": json.loads(r["constraints"] or "{}"),
-                     "sources": json.loads(r["sources"] or "[]"), "extensions": json.loads(r["extensions"] or "[]"),
-                     "columns": json.loads(r["columns"] or "[]")}
-                    for r in conn.execute("SELECT * FROM slots ORDER BY position")]
-        finally:
-            if own:
-                conn.close()
+        if conn is None:
+            with self.connect() as own:
+                return self.slots(own)
+        return [{"id": r["id"], "position": r["position"], "name": r["name"], "label": r["label"],
+                 "description": r["description"] or "", "required": bool(r["required"]), "unique": bool(r["unique"]),
+                 "kind": r["kind"], "value_type": r["value_type"], "constraints": json.loads(r["constraints"] or "{}"),
+                 "sources": json.loads(r["sources"] or "[]"), "extensions": json.loads(r["extensions"] or "[]"),
+                 "columns": json.loads(r["columns"] or "[]")}
+                for r in conn.execute("SELECT * FROM slots ORDER BY position")]
 
     def summary(self) -> dict:
         with self.connect() as conn:
@@ -749,6 +746,7 @@ class DatasetStore:
     def delete(self, dataset_id: str) -> None:
         dataset = self.get(dataset_id)
         with dataset.lock:
+            close_idle(dataset.path)
             for suffix in ("", "-wal", "-shm", "-journal"):
                 (dataset.path / (DATASET_DB + suffix)).unlink(missing_ok=True)
             try:

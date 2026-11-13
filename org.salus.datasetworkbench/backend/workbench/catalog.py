@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 from .sources import SOURCE_DB, FileSource, Source, TableSource, hidden, open_source
-from .util import NotFound, WorkbenchError, check_name, meta_set, rename_on_disk, resolve_inside, safe_rel_path
+from .util import NotFound, WorkbenchError, check_name, close_idle, meta_set, rename_on_disk, resolve_inside, safe_rel_path
 
 
 class Catalog:
@@ -161,6 +161,7 @@ class Catalog:
         """Forgets a source (its metadata goes away, the files stay) or, with `delete_files`, deletes its folder from disk."""
         source = self.find_source(source_id)
         with source.lock:
+            close_idle(source.path)
             if delete_files:
                 self._delete_folder(source.path)
             else:
@@ -172,6 +173,7 @@ class Catalog:
         real = path.resolve()
         if real == self.sources_dir.resolve() or self.sources_dir.resolve() not in real.parents:
             raise WorkbenchError("Refusing to delete a folder outside the sources.", 500)
+        close_idle(path)
         if path.is_symlink():
             path.unlink()
         else:
@@ -183,6 +185,7 @@ class Catalog:
         path = self._group_path(rel)
         if path == self.sources_dir:
             raise WorkbenchError("The top level cannot be renamed.")
+        close_idle(path)
         rename_on_disk(path, path.parent / new_name)
         self.tree()
         parent = safe_rel_path(rel).rsplit("/", 1)[0] + "/" if "/" in safe_rel_path(rel) else ""
@@ -193,6 +196,7 @@ class Catalog:
         new_name = check_name(new_name, "source cohort name")
         source = self.find_source(source_id)
         with source.lock:
+            close_idle(source.path)
             rename_on_disk(source.path, source.path.parent / new_name)
         renamed = open_source(source.path.parent / new_name)
         with renamed.connect() as conn:
@@ -223,6 +227,7 @@ class Catalog:
         dest = target / src.name
         if dest.exists():
             raise WorkbenchError(f"'{src.name}' already exists in {to or 'the top level'}.", 409)
+        close_idle(src)
         try:
             os.rename(src, dest)
         except OSError as e:

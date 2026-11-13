@@ -66,8 +66,8 @@ class Active:
 
     def status(self) -> dict:
         """What the frontend needs to know. Also follows a change of the setting."""
+        stored = self.settings.stored()  # asks Salus: not under the lock, so a slow answer holds up only this request
         with self._lock:
-            stored = self.settings.stored()
             if stored and (self.root is None or self.settings.normalize_or_none(stored) != self.root):
                 if self._activate(stored):
                     self.notify({"type": "config_changed"})

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -15,6 +16,8 @@ from .util import WorkbenchError, new_id
 
 log = logging.getLogger("workbench")
 Notify = Callable[[dict], None]
+SETTLE_DELAY = 0.5  # seconds a burst of uploads (or deletes) is collected before the datasets are brought up to date once
+SETTLE_IDLE_EXIT = 30.0
 
 
 class Workbench:
@@ -28,6 +31,10 @@ class Workbench:
         self._running: set[tuple] = set()
         self._guard = threading.Lock()
         self._exports: dict[str, dict] = {}  # by dataset: the last export's {state, progress, result, error, cancel}
+        self._settle_pending: set[str] = set()  # sources whose datasets are to be brought up to date (source_changed_later)
+        self._settle_cond = threading.Condition()
+        self._settler: threading.Thread | None = None
+        self._settling = False  # the worker is updating datasets right now
 
     # -- jobs
     def start_job(self, kind: str, target: str, work: Callable[[Callable[[dict], None]], dict]) -> dict:
@@ -119,12 +126,65 @@ class Workbench:
             return len(self._running)
 
     def source_changed(self, source_id: str) -> None:
-        """After a scan, an ingest or an upload: refreshes the states of all cells that reference the source.
+        """After a scan or an ingest (in its job): refreshes the states of all cells that reference the source.
 
         The files' fingerprints come from the source's index, which the scan (or the upload) has just brought up to date:
         looking at every referenced file again would read the disk a second time, which on a slow disk kept the backend
         busy long after a Refresh. Opening a dataset still checks the files themselves (check_dataset)."""
         self.notify({"type": "source_changed", "source": source_id})
+        self._update_datasets(source_id)
+
+    def source_changed_later(self, source_id: str) -> None:
+        """Like source_changed, for requests (an upload's commit, a rename, a delete): the file lists are told now, the
+        datasets are brought up to date in the background. That recomputes every entry that uses the source and runs the
+        automation of the datasets that read it, which takes seconds on a large dataset: done inside each upload's commit,
+        the commits of a folder upload queued up behind each other (one at a time, under the dataset's lock) until they
+        and everything else waiting for the backend's threads ran into Salus' 30 s timeout (504). Changes that arrive
+        while the worker waits or works are collected, so a folder of uploads costs one update, not one per file."""
+        self.notify({"type": "source_changed", "source": source_id})
+        if not self.background:
+            self._update_datasets(source_id)
+            return
+        with self._settle_cond:
+            self._settle_pending.add(source_id)
+            if self._settler is None:
+                self._settler = threading.Thread(target=self._settle_loop, name="settle-datasets", daemon=True)
+                self._settler.start()
+            self._settle_cond.notify()
+
+    def _settle_loop(self) -> None:
+        while True:
+            with self._settle_cond:
+                if not self._settle_pending:
+                    self._settle_cond.wait(SETTLE_IDLE_EXIT)
+                    if not self._settle_pending:
+                        self._settler = None
+                        return
+            time.sleep(SETTLE_DELAY)  # let the rest of a burst arrive
+            with self._settle_cond:
+                batch, self._settle_pending = self._settle_pending, set()
+                self._settling = True
+            try:
+                for source_id in sorted(batch):
+                    try:
+                        self._update_datasets(source_id)
+                    except Exception:
+                        log.exception("bringing the datasets up to date after a change of source %s failed", source_id)
+            finally:
+                with self._settle_cond:
+                    self._settling = False
+
+    def settled(self, timeout: float = 30.0) -> bool:
+        """Waits until no dataset update is pending or running (tests, benchmarks)."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            with self._settle_cond:
+                if not self._settle_pending and not self._settling:
+                    return True
+            time.sleep(0.02)
+        return False
+
+    def _update_datasets(self, source_id: str) -> None:
         referencing = self.datasets.datasets_referencing(source_id)
         for dataset in referencing:
             dataset.recompute(source_id=source_id, from_index=True)
@@ -176,7 +236,7 @@ class Workbench:
         if isinstance(source, TableSource):
             self.csv_arrived(source.id)
         else:
-            self.source_changed(source.id)
+            self.source_changed_later(source.id)
         self.notify({"type": "tree_changed"})
         return result
 
@@ -204,7 +264,7 @@ class Workbench:
     def rename_item(self, source_id: str, path: str, name: str) -> str:
         source = self.catalog.find_source(source_id)
         new_path = source.rename_item(path, name)
-        self.source_changed(source_id)  # entries pick up the new file name; nothing else changes
+        self.source_changed_later(source_id)  # entries pick up the new file name; nothing else changes
         self.notify({"type": "tree_changed"})
         return new_path
 
@@ -218,7 +278,7 @@ class Workbench:
     def delete_item(self, source_id: str, path: str) -> None:
         source = self.catalog.find_source(source_id)
         source.delete_item(path, self.referenced_items(source_id))
-        self.source_changed(source_id)
+        self.source_changed_later(source_id)
         self.notify({"type": "tree_changed"})
 
     def refresh_names(self) -> None:

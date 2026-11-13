@@ -24,10 +24,19 @@ scanned on its own (*Rescan files*) is skipped. Code: `Workbench.scan_all` in `b
 `backend/workbench/sources.py`; tests: `ScanDuringChangesTests` in `backend/tests/test_workbench.py`.
 
 Every SQLite connection is opened and closed under one lock (`workbench/util.py`, a workaround for hangs of conda's SQLite).
-Closing the last connection to a database checkpoints its WAL, which after a large write (a Refresh that recorded many files,
-an automation that created many entries) is slow on a network filesystem and used to hold up every request, so Salus answered
-504. A connection that changed 1000 rows or more now checkpoints itself before closing, outside that lock (`CheckpointTests`
-in `backend/tests/test_util.py`).
+Connections are therefore kept open after use and reused (a small pool per database file, at most 64 in all): closing the last
+connection to a database checkpoints its WAL and deletes it, with fsyncs, which on an HDD held up every other request behind that
+lock. A pooled connection is only reused for the very file it was opened on (device and inode), and deleting, moving or renaming
+a source cohort, a folder or a dataset closes the idle connections under it first. A connection that changed 1000 rows or more
+checkpoints the WAL when it is given back, outside the lock (`CheckpointTests`, `PoolTests` in `backend/tests/test_util.py`).
+
+An upload's commit, a rename and a delete only tell the views that the files changed; the datasets that use the cohort (their
+entries' states, the automation that makes entries from new files) are brought up to date by one background worker, once for a
+burst of changes (`source_changed_later` in `workbench/service.py`, `BackgroundUpdateTests`). Done inside every commit, a folder
+upload into a cohort with a large automated dataset queued the commits up behind each other until they ran into Salus' 30 s
+timeout (504), and with them every other request. The backend has 64 threads for requests (asyncio's default is cpus + 4) so a
+few slow requests cannot take all of them; the views refetch at most once per burst of events, and two files are uploaded at a
+time.
 
 After a scan the datasets are updated from the cohort's index (the sizes and dates the scan has just recorded), not by
 looking at every referenced file again, and the automation re-evaluates only the entries it created or changed: on a slow

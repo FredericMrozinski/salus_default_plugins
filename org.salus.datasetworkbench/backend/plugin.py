@@ -9,6 +9,7 @@ Configuration: the workbench folder is the `root` setting of the plugin (configu
 """
 import asyncio
 import faulthandler
+from concurrent.futures import ThreadPoolExecutor
 import logging
 import time
 import signal
@@ -163,7 +164,7 @@ def remove_source(req):
     """Forgets the source; with ?files=1 its folder is deleted from disk, too."""
     source_id = req.params["id"]
     wb.catalog.remove_source(source_id, delete_files=req.query.get("files") == "1")
-    wb.source_changed(source_id)  # references to it become "source missing"
+    wb.source_changed_later(source_id)  # references to it become "source missing"
     notify({"type": "tree_changed"})
     return None
 
@@ -242,7 +243,7 @@ def delete_group(req):
     """Deletes a group folder from disk. A group with content needs ?force=1."""
     removed = wb.catalog.delete_group(req.query.get("path", ""), force=req.query.get("force") == "1")
     for source_id in removed:
-        wb.source_changed(source_id)
+        wb.source_changed_later(source_id)
     notify({"type": "tree_changed"})
     return None
 
@@ -527,7 +528,15 @@ def candidates(req):
     return dataset.candidates(slot_id(req), req.query.get("q", ""), number(req, "limit", 30, 200), number(req, "offset", 0, 10**6))
 
 
+# Plain `def` routes run in the event loop's default thread pool, which asyncio sizes after the CPUs (min(32, cpus + 4)):
+# 8 threads on a 4-core server. Requests that wait on the disk or on a lock (an upload's commit, a scan's update) hold their
+# thread meanwhile; once all are taken, even the cheapest request waits in the queue, and after 30 s Salus answers 504 for
+# all of them: the whole workbench seemed frozen. Waiting threads cost no CPU, so the pool is large.
+HANDLER_THREADS = 64
+
+
 async def main(plugin):
+    asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(HANDLER_THREADS, thread_name_prefix="handler"))
     # Reading the setting asks Salus, which needs the running connection: so not while this module loads. A request that comes in
     # before this is done finds the setting itself (`wb.status()`).
     await asyncio.to_thread(wb.load)

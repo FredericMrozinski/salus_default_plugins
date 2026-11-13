@@ -13,6 +13,9 @@ let onBatchDone: (() => void) | null = null;
 const queue = createQueue({
   upload: (job, signal, onProgress) => uploadFile(job, job.sourceId, job.overwrite, onProgress, signal),
   onBatchDone: () => onBatchDone?.(),
+  // Two files at a time: parallel writes make an HDD seek between the files (slower in total), and every upload holds one of
+  // the browser's few connections to the server (6 for HTTP/1.1), which the views' own requests then wait for.
+  concurrency: 2,
 });
 
 export const enqueue = queue.enqueue;

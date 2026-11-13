@@ -613,6 +613,55 @@ class UploadTests(Base):
             self.wb.uploads.start(source.id, "x.txt", 3, True)
 
 
+class BackgroundUpdateTests(Base):
+    """An upload's commit tells the file lists at once and brings the datasets up to date in the background, once for a
+    burst of uploads (a commit used to recompute the datasets itself: commits queued behind each other into 504s)."""
+
+    def setUp(self):
+        super().setUp()
+        self.wb.background = True
+        self.source = self.file_source()
+        self.ds = self.wb.datasets.create("D")
+        self.ds.set_schema([{"name": "slide", "kind": "file", "sources": [self.source.id]}])
+        slot = self.ds.slots()[0]["id"]
+        self.ds.set_automation({"rules": {str(slot): {"mode": "source"}}})
+
+    def tearDown(self):
+        self.assertTrue(self.wb.settled())
+        super().tearDown()
+
+    def test_uploads_become_entries_with_one_update(self):
+        from unittest import mock
+        calls = []
+        update = self.wb._update_datasets
+        with mock.patch.object(self.wb, "_update_datasets", side_effect=lambda sid: (calls.append(sid), update(sid))):
+            for i in range(5):
+                self.upload(self.source, f"f{i}.svs", b"data")
+            self.assertTrue(self.wb.settled())
+        self.assertEqual(calls, [self.source.id])
+        self.assertEqual(self.ds.list_entries(50, 0)["total"], 5)
+        self.assertIn({"type": "dataset_changed", "dataset": self.ds.id}, self.events)
+
+    def test_the_commit_does_not_wait_for_the_datasets(self):
+        import threading
+        from unittest import mock
+        release = threading.Event()
+        with mock.patch.object(self.wb, "_update_datasets", side_effect=lambda sid: release.wait(5)):
+            started = time.monotonic()
+            result = self.upload(self.source, "a.svs", b"data")
+            self.assertLess(time.monotonic() - started, 1.0)
+            self.assertEqual(result["item"]["path"], "a.svs")
+            self.assertIn({"type": "source_changed", "source": self.source.id}, self.events)
+            release.set()
+
+    def test_a_change_during_an_update_gets_its_own_update(self):
+        self.upload(self.source, "a.svs", b"data")
+        self.assertTrue(self.wb.settled())
+        self.upload(self.source, "b.svs", b"data")
+        self.assertTrue(self.wb.settled())
+        self.assertEqual(self.ds.list_entries(50, 0)["total"], 2)
+
+
 class DatasetTests(Base):
     def setUp(self):
         super().setUp()

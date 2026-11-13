@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
+from collections import OrderedDict
 import sqlite3
 import threading
 import time
@@ -116,37 +118,131 @@ CHECKPOINT_AFTER_CHANGES = 1000
 SLOW_SECONDS = 2.0
 log = logging.getLogger("workbench.db")
 
+# Connections are kept open after use and handed out again (a small pool per database file). Every request used to open
+# and close several connections, one at a time under `_open_close`; and closing the last connection to a database makes
+# SQLite checkpoint the WAL into the database file and delete the WAL, with fsyncs: on an HDD that is tens of ms or more
+# per close, behind which every other request of the backend waited. A database with an idle connection is never "last
+# closed", so that cost is gone; the WAL is still checkpointed as it grows (SQLite's automatic checkpoint at commit, in the
+# writing thread). A pooled connection belongs to the file it was opened on (device and inode): one whose file was deleted
+# or replaced is closed instead of reused, and catalog operations that delete or move databases close the idle ones under
+# that folder first (close_idle).
+MAX_IDLE_PER_DB = 2
+MAX_IDLE_TOTAL = 64
+_idle: "OrderedDict[str, list[Conn]]" = OrderedDict()  # least recently used first
+_idle_guard = threading.Lock()
+
+
+def _file_ident(path: str):
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return st.st_dev, st.st_ino
+
+
+def _close(conns) -> None:
+    for conn in conns:
+        started = time.monotonic()
+        try:
+            with _open_close:
+                sqlite3.Connection.close(conn)
+        except sqlite3.Error:
+            pass
+        took = time.monotonic() - started
+        if took > SLOW_SECONDS:
+            log.warning("closing a database took %.1f s", took)
+
 
 class Conn(sqlite3.Connection):
-    """`with connect(...) as conn:` closes the connection at the end (plain sqlite3 only commits)."""
+    """`with connect(...) as conn:` gives the connection back at the end (to the pool, or closes it). The connection must
+    not be used after the block: another thread may have it by then."""
+    _key = ""
+    _ident = None
+    _changes_at_checkout = 0
 
     def __exit__(self, exc_type, exc, tb):
         try:
             return super().__exit__(exc_type, exc, tb)
         finally:
-            if self.total_changes >= CHECKPOINT_AFTER_CHANGES and not self.in_transaction:
+            self._release()
+
+    def _release(self) -> None:
+        try:
+            if self.in_transaction:
+                self.execute("ROLLBACK")
+            if self.total_changes - self._changes_at_checkout >= CHECKPOINT_AFTER_CHANGES:
                 started = time.monotonic()
                 try:
-                    self.execute("PRAGMA wal_checkpoint(PASSIVE)")
+                    self.execute("PRAGMA wal_checkpoint(PASSIVE)")  # keeps the WAL small after a big write; never waits for readers
                 except sqlite3.Error as e:
                     log.warning("checkpoint failed: %s", e)
                 took = time.monotonic() - started
                 if took > SLOW_SECONDS:
-                    log.warning("checkpoint after %d changes took %.1f s", self.total_changes, took)
-            started = time.monotonic()
-            with _open_close:
-                waited = time.monotonic() - started
-                self.close()
-            took = time.monotonic() - started
-            if took > SLOW_SECONDS:
-                log.warning("closing a database took %.1f s (%.1f s waiting for another open/close)", took, waited)
+                    log.warning("checkpoint after %d changes took %.1f s", self.total_changes - self._changes_at_checkout, took)
+        except sqlite3.ProgrammingError:
+            return  # closed already
+        except sqlite3.Error:
+            _close([self])
+            return
+        if self._ident is None or _file_ident(self._key) != self._ident:
+            _close([self])  # the file was deleted or replaced meanwhile
+            return
+        evicted = []
+        with _idle_guard:
+            conns = _idle.setdefault(self._key, [])
+            _idle.move_to_end(self._key)
+            if len(conns) < MAX_IDLE_PER_DB:
+                conns.append(self)
+            else:
+                evicted.append(self)
+            while sum(len(c) for c in _idle.values()) > MAX_IDLE_TOTAL:
+                _, oldest = _idle.popitem(last=False)
+                evicted += oldest
+        _close(evicted)
+
+    def close(self) -> None:
+        _close([self])
+
+
+def _take_idle(key: str, ident) -> "Conn | None":
+    stale, found = [], None
+    with _idle_guard:
+        conns = _idle.get(key)
+        while conns:
+            conn = conns.pop()
+            if conn._ident == ident:
+                found = conn
+                break
+            stale.append(conn)
+        if conns is not None and not conns:
+            del _idle[key]
+    _close(stale)
+    return found
+
+
+def close_idle(under: Path | None = None) -> None:
+    """Closes the pooled connections to the databases in a folder (all of them without one): before that folder, or a
+    database in it, is deleted, moved or renamed."""
+    prefix = None if under is None else str(under).rstrip("/") + "/"
+    gone = []
+    with _idle_guard:
+        for key in [k for k in _idle if prefix is None or k.startswith(prefix)]:
+            gone += _idle.pop(key)
+    _close(gone)
 
 
 def connect(path: Path, create: bool = False) -> sqlite3.Connection:
-    if not create and not Path(path).exists():
+    key = str(path)
+    ident = _file_ident(key)
+    if ident is None and not create:
         raise NotFound(f"Database {path} does not exist.")
+    if ident is not None:
+        conn = _take_idle(key, ident)
+        if conn is not None:
+            conn._changes_at_checkout = conn.total_changes
+            return conn
     with _open_close:
-        conn = sqlite3.connect(str(path), timeout=30, isolation_level=None, check_same_thread=False, factory=Conn)
+        conn = sqlite3.connect(key, timeout=30, isolation_level=None, check_same_thread=False, factory=Conn)
     conn.row_factory = sqlite3.Row
     if create:
         conn.execute("PRAGMA journal_mode=WAL")  # persistent: stored in the database file
@@ -155,6 +251,8 @@ def connect(path: Path, create: bool = False) -> sqlite3.Connection:
     # In WAL mode NORMAL still never corrupts the database; a power cut can only lose the last commits. It saves an fsync
     # per commit, which on a slow disk (a server's HDD) is what most writes wait for.
     conn.execute("PRAGMA synchronous=NORMAL")
+    conn._key, conn._ident = key, ident or _file_ident(key)
+    conn._changes_at_checkout = conn.total_changes
     return conn
 
 
